@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Kuestenlogik.Surgewave.Connector.Mirror</RootNamespace>
+    <Description>Cross-cluster replication (MirrorMaker 2.0) for Kuestenlogik.Surgewave</Description>
+    <!-- Suppress null dereference warnings for inherited Context property which is always initialized -->
+    <NoWarn>$(NoWarn);CS8602</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+    <PackageReference Include="Kuestenlogik.Surgewave.Client" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Gcp.Bigtable.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Gcp.Bigtable",
+  "name": "Gcp Bigtable",
+  "license": "Apache-2.0"
+}

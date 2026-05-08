@@ -1,0 +1,74 @@
+<Project>
+  <!-- Common properties for all connector projects -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CA1027;CA1720;CA1716;CA1815;CA1873;CA2024;CA2025;CA2227;NU1510;NU1902</NoWarn>
+  </PropertyGroup>
+
+  <!-- Centralized build output paths -->
+  <PropertyGroup>
+    <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts\</ArtifactsPath>
+    <BaseIntermediateOutputPath>$(ArtifactsPath)obj\$(MSBuildProjectName)\</BaseIntermediateOutputPath>
+    <IntermediateOutputPath>$(BaseIntermediateOutputPath)$(Configuration)\</IntermediateOutputPath>
+    <BaseOutputPath>$(ArtifactsPath)bin\$(MSBuildProjectName)\</BaseOutputPath>
+    <OutputPath>$(BaseOutputPath)$(Configuration)\</OutputPath>
+    <PackageOutputPath>$(ArtifactsPath)packages\</PackageOutputPath>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PublishDir>$(ArtifactsPath)publish\$(MSBuildProjectName)\$(Configuration)\</PublishDir>
+  </PropertyGroup>
+
+  <!-- Common metadata for NuGet packages -->
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
+    <Authors>Küstenlogik</Authors>
+    <Company>Küstenlogik</Company>
+    <Copyright>Copyright (c) 2025 Küstenlogik</Copyright>
+    <PackageTags>surgewave;kafka;connect;connectors</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/beachwalker/Surgewave.Connectors</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/beachwalker/Surgewave.Connectors</PackageProjectUrl>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <!-- Version information -->
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0</AssemblyVersion>
+    <FileVersion>0.1.0</FileVersion>
+  </PropertyGroup>
+
+  <!--
+    Surgewave plugin packaging via Kuestenlogik.Surgewave.Build (MSBuild tasks). Every project under
+    src/ that has a plugin.json next to its csproj automatically opts into:
+
+      1. PackageReference Kuestenlogik.Surgewave.Build (PrivateAssets=all so it does not bleed
+         into consumer NuGet metadata)
+      2. Content Include for plugin.json + optional pluginsettings.json so the
+         files land in the publish output where the packager looks for them
+      3. SurgewaveSppOutputDir defaulted to artifacts/pluginPackage so .swpkg files all land in
+         the same place regardless of which connector built them
+
+    Connectors that need to opt out (test projects, sample apps, ...) set
+    <SurgewavePackPlugin>false</SurgewavePackPlugin> in their own csproj. Pack itself is
+    triggered by 'dotnet publish -p:SurgewavePackPlugin=true' or by adding
+    <SurgewavePackPlugin>true</SurgewavePackPlugin> to the project file.
+  -->
+  <PropertyGroup>
+    <_SurgewavePluginManifestPath>$(MSBuildProjectDirectory)\plugin.json</_SurgewavePluginManifestPath>
+    <_SurgewavePluginSettingsPath>$(MSBuildProjectDirectory)\pluginsettings.json</_SurgewavePluginSettingsPath>
+    <SurgewaveSppOutputDir Condition="'$(SurgewaveSppOutputDir)' == ''">$(ArtifactsPath)pluginPackage\</SurgewaveSppOutputDir>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(_SurgewavePluginManifestPath)')">
+    <PackageReference Include="Kuestenlogik.Surgewave.Build" PrivateAssets="all" />
+    <Content Include="plugin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="pluginsettings.json" Condition="Exists('$(_SurgewavePluginSettingsPath)')"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Discord.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Discord",
+  "name": "Discord",
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.SpaCy.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.SpaCy",
+  "name": "SpaCy",
+  "license": "Apache-2.0"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "Kuestenlogik.Surgewave.Connector.Aws.Sqs",
+  "name": "Aws Sqs",
+  "version": "0.1.0",
+  "authors": ["Kuestenlogik"],
+  "license": "Apache-2.0",
+  "assemblies": ["Kuestenlogik.Surgewave.Connector.Aws.Sqs.dll"]
+}

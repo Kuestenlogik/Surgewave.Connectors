@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- NU1904: Akka NuGet security advisory -->
+    <NoWarn>$(NoWarn);NU1904</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Akka" />
+    <PackageReference Include="Akka.Cluster" />
+    <PackageReference Include="Akka.Cluster.Tools" />
+    <PackageReference Include="Akka.Remote" />
+    <PackageReference Include="Akka.Streams" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+  </ItemGroup>
+
+</Project>

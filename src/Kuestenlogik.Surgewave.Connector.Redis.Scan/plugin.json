@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Redis.Scan.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Redis.Scan",
+  "name": "Redis Scan",
+  "license": "Apache-2.0"
+}

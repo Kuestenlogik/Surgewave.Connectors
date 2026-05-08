@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>preview</LangVersion>
+    <!-- CS0649: Unassigned field due to conditional compilation stub code -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+  </ItemGroup>
+
+  <!--
+  SAP HANA .NET driver is not available on NuGet.
+  It must be installed from SAP Service Marketplace or SAP Development Tools.
+  After installing the HANA client, add this package reference:
+  <ItemGroup>
+    <PackageReference Include="Sap.Data.Hana.Core.v2.1" />
+  </ItemGroup>
+  -->
+
+</Project>

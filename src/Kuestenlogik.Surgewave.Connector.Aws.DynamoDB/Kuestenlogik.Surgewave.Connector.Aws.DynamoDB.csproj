@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Suppress low-severity AWSSDK.Core vulnerability warning until upstream fixes it -->
+    <NoWarn>$(NoWarn);NU1901</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Aws.DynamoDB.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.DynamoDBv2" />
+    <PackageReference Include="AWSSDK.DynamoDBStreams" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+  </ItemGroup>
+</Project>

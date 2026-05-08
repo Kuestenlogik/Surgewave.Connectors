@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Suppress low-severity AWSSDK.Core vulnerability warning -->
+    <NoWarn>$(NoWarn);NU1901</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.Kinesis" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+  </ItemGroup>
+</Project>

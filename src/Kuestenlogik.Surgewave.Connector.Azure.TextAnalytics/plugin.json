@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Azure.TextAnalytics.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Azure.TextAnalytics",
+  "name": "Azure TextAnalytics",
+  "license": "Apache-2.0"
+}

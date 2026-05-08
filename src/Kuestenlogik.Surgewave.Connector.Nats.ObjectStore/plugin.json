@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Nats.ObjectStore.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Nats.ObjectStore",
+  "name": "Nats ObjectStore",
+  "license": "Apache-2.0"
+}

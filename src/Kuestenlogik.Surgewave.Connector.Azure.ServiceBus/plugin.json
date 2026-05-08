@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Azure.ServiceBus.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Azure.ServiceBus",
+  "name": "Azure ServiceBus",
+  "license": "Apache-2.0"
+}

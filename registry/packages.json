@@ -1,0 +1,2041 @@
+[
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Akka",
+    "version": "0.1.0",
+    "name": "Akka Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Alexa",
+    "version": "0.1.0",
+    "name": "Alexa Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Amqp",
+    "version": "0.1.0",
+    "name": "Amqp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Anthropic",
+    "version": "0.1.0",
+    "name": "Anthropic Connector",
+    "description": "Surgewave Kafka Connect connector for Anthropic Claude API integration. Supports chat completions with Claude 3.5/Opus/Haiku models.",
+    "author": "Kuestenlogik",
+    "tags": [
+      "kafka",
+      "surgewave",
+      "connect",
+      "anthropic",
+      "claude",
+      "ai",
+      "llm",
+      "chat",
+      "completions"
+    ],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Bedrock",
+    "version": "0.1.0",
+    "name": "Aws Bedrock Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Comprehend",
+    "version": "0.1.0",
+    "name": "Aws Comprehend Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.DynamoDB",
+    "version": "0.1.0",
+    "name": "Aws DynamoDB Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Efs",
+    "version": "0.1.0",
+    "name": "Aws Efs Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:57Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Kinesis",
+    "version": "0.1.0",
+    "name": "Aws Kinesis Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Neptune",
+    "version": "0.1.0",
+    "name": "Aws Neptune Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Sns",
+    "version": "0.1.0",
+    "name": "Aws Sns Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Aws.Sqs",
+    "version": "0.1.0",
+    "name": "Aws Sqs Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.Blob",
+    "version": "0.1.0",
+    "name": "Azure Blob Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.CosmosDb",
+    "version": "0.1.0",
+    "name": "Azure CosmosDb Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.OpenAI",
+    "version": "0.1.0",
+    "name": "Azure OpenAI Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.Queue",
+    "version": "0.1.0",
+    "name": "Azure Queue Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.ServiceBus",
+    "version": "0.1.0",
+    "name": "Azure ServiceBus Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:58Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.Table",
+    "version": "0.1.0",
+    "name": "Azure Table Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Azure.TextAnalytics",
+    "version": "0.1.0",
+    "name": "Azure TextAnalytics Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Batching",
+    "version": "0.1.0",
+    "name": "Batching Connector",
+    "description": "Surgewave Kafka Connect batching transformer that aggregates messages based on count, size, or timeout policies",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Beanstalkd",
+    "version": "0.1.0",
+    "name": "Beanstalkd Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Cassandra",
+    "version": "0.1.0",
+    "name": "Cassandra Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Csv",
+    "version": "0.1.0",
+    "name": "Csv Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Database",
+    "version": "0.1.0",
+    "name": "Database Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source",
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.DeepL",
+    "version": "0.1.0",
+    "name": "DeepL Connector",
+    "description": "Surgewave Kafka Connect DeepL connector for text translation",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Discord",
+    "version": "0.1.0",
+    "name": "Discord Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:56:59Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Elasticsearch",
+    "version": "0.1.0",
+    "name": "Elasticsearch Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Excel",
+    "version": "0.1.0",
+    "name": "Excel Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Facebook",
+    "version": "0.1.0",
+    "name": "Facebook Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.FacebookMessenger",
+    "version": "0.1.0",
+    "name": "FacebookMessenger Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Flink",
+    "version": "0.1.0",
+    "name": "Flink Connector",
+    "description": "Apache Flink REST API connector for Surgewave - Job management, monitoring, and data integration",
+    "author": "Kuestenlogik",
+    "tags": [
+      "surgewave",
+      "flink",
+      "connector",
+      "streaming",
+      "rest-api"
+    ],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.BigQuery",
+    "version": "0.1.0",
+    "name": "Gcp BigQuery Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.Bigtable",
+    "version": "0.1.0",
+    "name": "Gcp Bigtable Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.Firestore",
+    "version": "0.1.0",
+    "name": "Gcp Firestore Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.Language",
+    "version": "0.1.0",
+    "name": "Gcp Language Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:00Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.PubSub",
+    "version": "0.1.0",
+    "name": "Gcp PubSub Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.Spanner",
+    "version": "0.1.0",
+    "name": "Gcp Spanner Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.Storage",
+    "version": "0.1.0",
+    "name": "Gcp Storage Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Gcp.VertexAI",
+    "version": "0.1.0",
+    "name": "Gcp VertexAI Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Git",
+    "version": "0.1.0",
+    "name": "Git Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Google.Drive",
+    "version": "0.1.0",
+    "name": "Google Drive Connector",
+    "description": "Surgewave Kafka Connect Google Drive connector for file synchronization",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Google.Home",
+    "version": "0.1.0",
+    "name": "Google Home Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Google.Photos",
+    "version": "0.1.0",
+    "name": "Google Photos Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.GraphQL",
+    "version": "0.1.0",
+    "name": "GraphQL Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:01Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Grok",
+    "version": "0.1.0",
+    "name": "Grok Connector",
+    "description": "Surgewave Kafka Connect connector for xAI Grok API integration. Supports chat completions with Grok models using OpenAI-compatible API.",
+    "author": "Kuestenlogik",
+    "tags": [
+      "kafka",
+      "surgewave",
+      "connect",
+      "xai",
+      "grok",
+      "ai",
+      "llm",
+      "chat",
+      "completions"
+    ],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Http",
+    "version": "0.1.0",
+    "name": "Http Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.HttpServer",
+    "version": "0.1.0",
+    "name": "HttpServer Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Hue",
+    "version": "0.1.0",
+    "name": "Hue Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.HuggingFace",
+    "version": "0.1.0",
+    "name": "HuggingFace Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.ICal",
+    "version": "0.1.0",
+    "name": "ICal Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Imap",
+    "version": "0.1.0",
+    "name": "Imap Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.InfluxDB",
+    "version": "0.1.0",
+    "name": "InfluxDB Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:02Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.InProc",
+    "version": "0.1.0",
+    "name": "InProc Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Instagram",
+    "version": "0.1.0",
+    "name": "Instagram Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Kafka.Bridge",
+    "version": "0.1.0",
+    "name": "Kafka Bridge Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.LinkedIn",
+    "version": "0.1.0",
+    "name": "LinkedIn Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Logic",
+    "version": "0.1.0",
+    "name": "Logic Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Matter",
+    "version": "0.1.0",
+    "name": "Matter Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Mattermost",
+    "version": "0.1.0",
+    "name": "Mattermost Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:03Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Mirror",
+    "version": "0.1.0",
+    "name": "Mirror Connector",
+    "description": "Cross-cluster replication (MirrorMaker 2.0) for Kuestenlogik.Surgewave",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.MongoDB",
+    "version": "0.1.0",
+    "name": "MongoDB Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Mqtt",
+    "version": "0.1.0",
+    "name": "Mqtt Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.MySql",
+    "version": "0.1.0",
+    "name": "MySql Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Nanomsg",
+    "version": "0.1.0",
+    "name": "Nanomsg Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Nats",
+    "version": "0.1.0",
+    "name": "Nats Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Nats.Kv",
+    "version": "0.1.0",
+    "name": "Nats Kv Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Nats.ObjectStore",
+    "version": "0.1.0",
+    "name": "Nats ObjectStore Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:04Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Neo4j",
+    "version": "0.1.0",
+    "name": "Neo4j Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Nsq",
+    "version": "0.1.0",
+    "name": "Nsq Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Ollama",
+    "version": "0.1.0",
+    "name": "Ollama Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.OneDrive",
+    "version": "0.1.0",
+    "name": "OneDrive Connector",
+    "description": "Surgewave Kafka Connect OneDrive connector for file synchronization via Microsoft Graph API",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.OpenAI",
+    "version": "0.1.0",
+    "name": "OpenAI Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Oracle",
+    "version": "0.1.0",
+    "name": "Oracle Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Parquet",
+    "version": "0.1.0",
+    "name": "Parquet Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.PostgreSql",
+    "version": "0.1.0",
+    "name": "PostgreSql Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source",
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Pulsar",
+    "version": "0.1.0",
+    "name": "Pulsar Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Qdrant",
+    "version": "0.1.0",
+    "name": "Qdrant Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:05Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.RabbitMQ",
+    "version": "0.1.0",
+    "name": "RabbitMQ Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Reddit",
+    "version": "0.1.0",
+    "name": "Reddit Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Redis",
+    "version": "0.1.0",
+    "name": "Redis Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Redis.List",
+    "version": "0.1.0",
+    "name": "Redis List Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Redis.Scan",
+    "version": "0.1.0",
+    "name": "Redis Scan Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.RocketChat",
+    "version": "0.1.0",
+    "name": "RocketChat Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.S3",
+    "version": "0.1.0",
+    "name": "S3 Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source",
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Sap.EventMesh",
+    "version": "0.1.0",
+    "name": "Sap EventMesh Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Sap.Hana",
+    "version": "0.1.0",
+    "name": "Sap Hana Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Sap.OData",
+    "version": "0.1.0",
+    "name": "Sap OData Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Script",
+    "version": "0.1.0",
+    "name": "Script Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Sequence",
+    "version": "0.1.0",
+    "name": "Sequence Connector",
+    "description": "Surgewave Kafka Connect Sequence connector for reading from multiple sources in order",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:06Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Sftp",
+    "version": "0.1.0",
+    "name": "Sftp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.SignalR",
+    "version": "0.1.0",
+    "name": "SignalR Connector",
+    "description": "SignalR Source and Sink connectors for Surgewave Connect",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Slack",
+    "version": "0.1.0",
+    "name": "Slack Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Smtp",
+    "version": "0.1.0",
+    "name": "Smtp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Snowflake",
+    "version": "0.1.0",
+    "name": "Snowflake Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.SocketServer",
+    "version": "0.1.0",
+    "name": "SocketServer Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.SocketStream",
+    "version": "0.1.0",
+    "name": "SocketStream Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.SpaCy",
+    "version": "0.1.0",
+    "name": "SpaCy Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Spark",
+    "version": "0.1.0",
+    "name": "Spark Connector",
+    "description": "Apache Spark/Livy REST API connector for Surgewave - Job management, monitoring, and data integration",
+    "author": "Kuestenlogik",
+    "tags": [
+      "surgewave",
+      "spark",
+      "livy",
+      "connector",
+      "streaming",
+      "rest-api",
+      "batch"
+    ],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.SqlServer",
+    "version": "0.1.0",
+    "name": "SqlServer Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Surgewave.Bridge",
+    "version": "0.1.0",
+    "name": "Surgewave Bridge Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:07Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Tcp",
+    "version": "0.1.0",
+    "name": "Tcp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Teams",
+    "version": "0.1.0",
+    "name": "Teams Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Telegram",
+    "version": "0.1.0",
+    "name": "Telegram Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.TextChunking",
+    "version": "0.1.0",
+    "name": "TextChunking Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.TigerBeetle",
+    "version": "0.1.0",
+    "name": "TigerBeetle Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.TimescaleDB",
+    "version": "0.1.0",
+    "name": "TimescaleDB Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Twitter",
+    "version": "0.1.0",
+    "name": "Twitter Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Udp",
+    "version": "0.1.0",
+    "name": "Udp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Weather",
+    "version": "0.1.0",
+    "name": "Weather Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.WhatsApp",
+    "version": "0.1.0",
+    "name": "WhatsApp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:08Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Wikipedia",
+    "version": "0.1.0",
+    "name": "Wikipedia Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "source"
+    ],
+    "published": "2026-02-27T15:57:09Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.Xmpp",
+    "version": "0.1.0",
+    "name": "Xmpp Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:09Z",
+    "downloadCount": 0,
+    "dependencies": []
+  },
+  {
+    "packageId": "Kuestenlogik.Surgewave.Connector.ZeroMQ",
+    "version": "0.1.0",
+    "name": "ZeroMQ Connector",
+    "description": "",
+    "author": "Kuestenlogik",
+    "tags": [],
+    "availableVersions": [
+      "0.1.0"
+    ],
+    "connectorTypes": [
+      "sink",
+      "source"
+    ],
+    "published": "2026-02-27T15:57:09Z",
+    "downloadCount": 0,
+    "dependencies": []
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Surgewave.Bridge.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Surgewave.Bridge",
+  "name": "Surgewave Bridge",
+  "license": "Apache-2.0"
+}
