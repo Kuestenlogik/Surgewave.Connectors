@@ -1,0 +1,16 @@
+Surgewave Connectors
+Copyright 2026 Küstenlogik
+
+This product includes software developed by Küstenlogik
+(https://www.kuestenlogik.com).
+
+Licensed under the Apache License, Version 2.0 (the "License").
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Connector packages may bundle or reference third-party libraries
+(database drivers, cloud SDKs, AI client SDKs, etc.) that retain
+their respective licenses. See the per-connector csproj for the
+exact dependency set; license terms travel with the consumed
+NuGet packages.
