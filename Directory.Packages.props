@@ -2,6 +2,10 @@
   <!-- Central Package Version Management -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Transitive Pinning damit Security-Overrides aus diesem File auch dann greifen,
+         wenn das verwundbare Paket nur indirekt (durch NetMQ / Microsoft.Graph / Azure.Identity)
+         reingezogen wird. -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
     <!-- Surgewave Core (from local or CI NuGet feed) -->
@@ -26,11 +30,17 @@
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.2" />
+    <!-- Transitive security overrides:
+         - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf (ZeroMQ-Connector).
+         - Microsoft.Kiota.Abstractions 1.21.1 → GHSA-7j59-v9qr-6fq9 (OneDrive/Teams-Connector). -->
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.7" />
+    <PackageVersion Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
     <!-- JSON -->
     <PackageVersion Include="System.Text.Json" Version="9.0.0" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <!-- Kafka Bridge -->
-    <PackageVersion Include="Confluent.Kafka" Version="2.13.2" />
+    <!-- 2.14.0 align mit Kuestenlogik.Surgewave.Testing (Hauptrepo) — vermeidet NU1109 downgrade. -->
+    <PackageVersion Include="Confluent.Kafka" Version="2.14.0" />
     <!-- Connectors: Databases -->
     <PackageVersion Include="MySqlConnector" Version="2.5.0" />
     <PackageVersion Include="MySqlCdc" Version="4.0.1" />
