@@ -23,15 +23,18 @@
     <PublishDir>$(ArtifactsPath)publish\$(MSBuildProjectName)\$(Configuration)\</PublishDir>
   </PropertyGroup>
 
-  <!-- Common metadata for NuGet packages -->
+  <!-- Common metadata for NuGet packages.
+       Authors/Company als ASCII-Spelling (NuGet-Metadaten-Kompatibilitaet, weil
+       das Surgewave-Core dieselbe Konvention nutzt); human-facing Copyright behaelt
+       den Umlaut. -->
   <PropertyGroup Condition="'$(IsPackable)' != 'false'">
-    <Authors>Küstenlogik</Authors>
-    <Company>Küstenlogik</Company>
-    <Copyright>Copyright (c) 2025 Küstenlogik</Copyright>
+    <Authors>Kuestenlogik</Authors>
+    <Company>Kuestenlogik</Company>
+    <Copyright>Copyright (c) 2026 Küstenlogik</Copyright>
     <PackageTags>surgewave;kafka;connect;connectors</PackageTags>
     <RepositoryType>git</RepositoryType>
-    <RepositoryUrl>https://github.com/beachwalker/Surgewave.Connectors</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/beachwalker/Surgewave.Connectors</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Kuestenlogik/Surgewave.Connectors</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/Kuestenlogik/Surgewave.Connectors</PackageProjectUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
 
