@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_NOLOGO: true
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Configure NuGet auth
+        run: >
+          dotnet nuget update source github
+          --username ${{ github.actor }}
+          --password ${{ secrets.PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
+          --store-password-in-clear-text
+          --configfile nuget.config
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore Kuestenlogik.Surgewave.Connectors.slnx
+
+      - name: Build & Test
+        run: |
+          dotnet build Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-restore -p:Version=${{ steps.version.outputs.VERSION }}
+          dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -v normal
+
+      - name: Pack NuGet
+        run: dotnet pack Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -o artifacts/packages -p:Version=${{ steps.version.outputs.VERSION }}
+
+      # .swpkg pro Connector (118 Stueck) via Kuestenlogik.Surgewave.Build
+      # MSBuild-Tasks. Jedes Connector-csproj inherits PackageReference +
+      # Content-Include aus Directory.Build.props; nur Aufruf mit
+      # `-p:SurgewavePackPlugin=true` triggert den Packager.
+      - name: Pack .swpkg plugins
+        run: |
+          set -e
+          for proj in src/*/Kuestenlogik.Surgewave.Connector.*.csproj; do
+            [ -f "$proj" ] || continue
+            dir=$(dirname "$proj")
+            [ -f "$dir/plugin.json" ] || continue
+            dotnet publish "$proj" -c Release --no-build \
+              -p:SurgewavePackPlugin=true \
+              -p:Version=${{ steps.version.outputs.VERSION }}
+          done
+
+      - name: Publish NuGet to GitHub Packages
+        if: ${{ !contains(github.ref, '-rc') }}
+        run: dotnet nuget push "artifacts/packages/*.nupkg" --source "https://nuget.pkg.github.com/Kuestenlogik/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
+
+      # nuget.org: nur GA-Tags (kein `-rc`), nur wenn Secret konfiguriert.
+      # Connectors sind alle Apache 2.0 → public-pushbar. NUGET_API_KEY
+      # braucht den 'Push new packages and package versions'-Scope mit Glob
+      # `Kuestenlogik.Surgewave.Connector.*`.
+      - name: Publish NuGet to nuget.org
+        if: ${{ !contains(github.ref, '-rc') && env.NUGET_API_KEY != '' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "artifacts/packages/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY" \
+            --skip-duplicate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref, '-rc') }}
+          # 118 Connectors × (.nupkg + .swpkg) sind als Release-Assets viel,
+          # aber genau das macht Side-Load ohne Marketplace moeglich. Wer das
+          # nicht braucht, holt die Pakete von nuget.org / GHP.
+          files: |
+            artifacts/packages/*.nupkg
+            artifacts/pluginPackage/*.swpkg
