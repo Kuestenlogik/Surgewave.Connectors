@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Gcp.VertexAI.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Gcp.VertexAI",
+  "name": "Gcp VertexAI",
+  "license": "Apache-2.0"
+}

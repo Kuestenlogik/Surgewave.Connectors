@@ -1,0 +1,12 @@
+{
+  "authors": [
+    "Kuestenlogik"
+  ],
+  "assemblies": [
+    "Kuestenlogik.Surgewave.Connector.Gcp.BigQuery.dll"
+  ],
+  "version": "0.1.0",
+  "id": "Kuestenlogik.Surgewave.Connector.Gcp.BigQuery",
+  "name": "Gcp BigQuery",
+  "license": "Apache-2.0"
+}

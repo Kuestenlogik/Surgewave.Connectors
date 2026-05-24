@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>preview</LangVersion>
+    <!-- CS0169/CS8620: OData client library nullability quirks -->
+    <NoWarn>$(NoWarn);CS0169;CS8620</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Simple.OData.Client" />
+  </ItemGroup>
+
+</Project>
