@@ -56,19 +56,34 @@ jobs:
       - name: Build
         run: dotnet build Kuestenlogik.Surgewave.Connectors.slnx --no-restore -c Release
 
+      # xUnit v3 + Microsoft.Testing.Platform (MTP): klassisches
+      # `--collect "XPlat Code Coverage"` von VSTest funktioniert NICHT
+      # mehr, MTP ignoriert das stumm und schreibt nichts.
+      # Stattdessen `--` Separator + MTP-native Coverage-Args:
+      # `--coverage --coverage-output-format cobertura`. Erfordert
+      # die PackageReference `Microsoft.Testing.Extensions.CodeCoverage`
+      # in den Test-Projekten (zentral via tests/Directory.Build.props).
+      #
+      # Filter via MTP geht ueber `--filter-trait` / `--filter-class`
+      # statt VSTest's `--filter`; Integration-Test-Exclude darum hier
+      # ueber das `FullyQualifiedName` per `--filter` — wenn das ueber
+      # MTP nicht greift, faengt die nachgelagerte Integration-Trait-
+      # Pruefung das auf.
       - name: Run tests with coverage
         run: |
+          mkdir -p artifacts/coverage/raw
           dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
-            --collect:"XPlat Code Coverage" \
-            --results-directory artifacts/coverage/raw \
-            --settings coverlet.runsettings \
             --filter "FullyQualifiedName!~IntegrationTests" \
-            --verbosity minimal
+            --verbosity minimal \
+            -- \
+            --coverage \
+            --coverage-output-format cobertura \
+            --coverage-output-folder $(pwd)/artifacts/coverage/raw
 
       - name: Generate coverage report
         uses: danielpalme/ReportGenerator-GitHub-Action@5
         with:
-          reports: 'artifacts/coverage/raw/**/coverage.cobertura.xml'
+          reports: 'artifacts/coverage/raw/**/*.cobertura.xml'
           targetdir: 'artifacts/coverage/report'
           reporttypes: 'Html;Badges;TextSummary;MarkdownSummaryGithub'
           assemblyfilters: '+Kuestenlogik.Surgewave.Connector.*;-*.Tests;-*.Benchmarks'

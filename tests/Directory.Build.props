@@ -5,4 +5,16 @@
   <PropertyGroup>
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
+
+  <!-- Coverage: MTP-native collector. Wird zentral hier injiziert,
+       sodass die einzelnen Test-csprojs nichts mehr deklarieren muessen.
+       Aktivieren via:
+         dotnet test ... -- --coverage --coverage-output-format cobertura
+       (Doppel-Strich trennt MSBuild-Args von MTP-Args.) -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
 </Project>
