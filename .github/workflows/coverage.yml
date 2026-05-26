@@ -59,9 +59,15 @@ jobs:
       # Coverage via coverlet.msbuild (MSBuild-driven). Funktioniert
       # mit xUnit v3 + Microsoft.Testing.Platform genauso wie mit
       # VSTest, weil Coverlet hier als MSBuild-Target laeuft, nicht
-      # als VSTest-Collector. Pro Test-Projekt entsteht eine
-      # coverage.cobertura.xml im jeweiligen Output-Verzeichnis;
-      # ReportGenerator findet sie via Glob.
+      # als VSTest-Collector.
+      #
+      # KEIN /p:MergeWith=... auf slnx-Ebene: jedes Test-Projekt
+      # versucht in dieselbe Merge-Datei zu schreiben und ueber-
+      # schreibt die anderen (letzter gewinnt, Coverage zeigt nur
+      # 1 Assembly). Stattdessen RELATIVER CoverletOutput pro
+      # Projekt — Coverlet legt seine .cobertura.xml im jeweiligen
+      # Projekt-Verzeichnis ab, ReportGenerator sammelt alle via
+      # `**/*.cobertura.xml`-Glob.
       - name: Run tests with coverage
         run: |
           dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
@@ -69,15 +75,14 @@ jobs:
             --verbosity minimal \
             /p:CollectCoverage=true \
             /p:CoverletOutputFormat=cobertura \
-            /p:CoverletOutput=$(pwd)/artifacts/coverage/raw/ \
-            /p:MergeWith=$(pwd)/artifacts/coverage/raw/coverage.json \
+            /p:CoverletOutput=./coverage.cobertura.xml \
             /p:Include="[Kuestenlogik.Surgewave.Connector.*]*" \
             /p:Exclude="[*.Tests]*"
 
       - name: Generate coverage report
         uses: danielpalme/ReportGenerator-GitHub-Action@5
         with:
-          reports: 'artifacts/coverage/raw/**/*.cobertura.xml'
+          reports: 'tests/**/coverage.cobertura.xml'
           targetdir: 'artifacts/coverage/report'
           reporttypes: 'Html;Badges;TextSummary;MarkdownSummaryGithub'
           assemblyfilters: '+Kuestenlogik.Surgewave.Connector.*;-*.Tests;-*.Benchmarks'
