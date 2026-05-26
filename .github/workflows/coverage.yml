@@ -96,12 +96,12 @@ jobs:
             cat artifacts/coverage/report/Summary.txt
           fi
 
-      # Coverage-Floor — verhindert dass die Cross-Connector-Coverage
-      # weiter abrutscht. Initial-Werte sind absichtlich niedrig
-      # gesetzt: 45 von 118 Connectors haben heute *gar kein*
-      # Test-Projekt, das druckt die Numbers nach unten. Wenn die
-      # fehlenden Test-Projekte angelegt sind, kann der Threshold
-      # iterativ in 5er-Schritten hochgezogen werden.
+      # Coverage-Floor — verhindert Regressionen ueber die aktuell
+      # gemessene Baseline hinaus. Erst-Messung 2026-05-26:
+      # Line 41.5 % / Branch 31.6 % auf 72 Connector-Assemblies
+      # (von 118 — 45 haben heute kein Test-Projekt). Threshold ist
+      # ~1.5pp unter Baseline gesetzt, sodass eine echte Regression
+      # CI failt aber moderate Schwankungen toleriert werden.
       - name: Enforce coverage thresholds
         if: always()
         run: |
@@ -118,8 +118,8 @@ jobs:
             cat "$SUMMARY"
             exit 1
           fi
-          MIN_LINE=20
-          MIN_BRANCH=15
+          MIN_LINE=40
+          MIN_BRANCH=30
           echo "Line coverage:   ${LINE}% (min ${MIN_LINE}%)"
           echo "Branch coverage: ${BRANCH}% (min ${MIN_BRANCH}%)"
           BAD=0

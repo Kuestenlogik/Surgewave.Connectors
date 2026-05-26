@@ -11,12 +11,14 @@ This repository ships 118 connectors. Each connector lives under
 ReportGenerator HTML/Markdown summary plus badges, posts a comment to the PR,
 and enforces a coverage **floor**.
 
-Current floor: **20 % line / 15 % branch**.
+Current floor: **40 % line / 30 % branch**.
 
-The floor is intentionally low because today 45 of 118 connectors have **no
-test project at all** (see [Open testing work](#open-testing-work) below). As
-those gaps are filled, the floor will be ratcheted up in 5-point steps so a
-regression of more than a few points fails CI.
+Baseline measured 2026-05-26: **41.5 % line / 31.6 % branch** across 72
+Connector-Assemblies (the 45 connectors without a test project are absent
+from the report — they contribute zero to both numerator and denominator).
+The floor sits ~1.5 pp under baseline so moderate fluctuation passes but a
+real regression fails CI. The floor is ratcheted up alongside the
+[backlog](#open-testing-work) below.
 
 Run the same checks locally:
 
@@ -127,10 +129,17 @@ target of ~30 Facts per non-trivial connector.
 
 ### Threshold ratchet plan
 
-| Milestone | Line | Branch |
-|---|---|---|
-| Today (with 45 untested connectors) | **20 %** | **15 %** |
-| After P0/P1 batch (15 connectors) | 30 % | 22 % |
-| After P2 batch (20 connectors) | 40 % | 30 % |
-| After thin-test audit | 50 % | 38 % |
-| `1.0` ship | 60 % | 45 % |
+Baseline (2026-05-26): 41.5 % line / 31.6 % branch on the 72 tested
+connectors. Adding test projects for the 45 untested connectors will
+initially **lower** the cross-suite percentage (more code in the
+denominator before tests catch up), so the ratchet plan keeps a buffer
+between current measurement and floor.
+
+| Milestone | Line | Branch | Notes |
+|---|---|---|---|
+| Today (baseline) | **40 %** | **30 %** | floor sits ~1.5 pp below baseline |
+| After thin-test audit (raises Database, etc.) | 45 % | 35 % | tests within existing 72 projects |
+| After P0/P1 batch (15 connectors) | 42 % | 32 % | new projects pull denominator up |
+| After P2 batch (20 connectors) | 45 % | 35 % | with batch-tests landed |
+| After full backlog (all 45 added) | 50 % | 40 % | every connector has at least basic coverage |
+| `1.0` ship | 60 % | 45 % | targeted push on hot-path code |
