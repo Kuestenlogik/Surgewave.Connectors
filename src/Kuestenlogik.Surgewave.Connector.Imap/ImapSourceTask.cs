@@ -399,6 +399,11 @@ public class ImapSourceTask : SourceTask
             {
                 if (attachment is MimePart mimePart)
                 {
+                    // MailKit 4.16 markiert MimePart.Content als nullable
+                    // (vor 4.16 implicit non-null). Skip attachments ohne
+                    // dekodierbaren Content statt zu NRE'en.
+                    if (mimePart.Content is null) continue;
+
                     using var stream = new MemoryStream();
                     mimePart.Content.DecodeTo(stream);
 
