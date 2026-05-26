@@ -20,12 +20,12 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
-    <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage ist der
-         MTP-native Collector (xUnit v3 / TestingPlatformDotnetTestSupport=true).
-         coverlet.collector wird im MTP-Modus ignoriert; wir behalten es nur
-         als historischen Eintrag, falls einzelne Projekte auf VSTest-Modus
-         zurueckfallen muessen. -->
-    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.7.0" />
+    <!-- Coverage: coverlet.msbuild ist MSBuild-driven und funktioniert
+         unabhaengig vom Test-Runner (VSTest und MTP gleichermassen).
+         coverlet.collector waere VSTest-only und wird im MTP-Modus
+         (TestingPlatformDotnetTestSupport=true) stumm ignoriert; bleibt
+         drin fuer eventuelle VSTest-Fallbacks. -->
+    <PackageVersion Include="coverlet.msbuild" Version="6.0.4" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <!-- Logging -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.2" />

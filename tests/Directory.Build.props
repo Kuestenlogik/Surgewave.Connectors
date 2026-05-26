@@ -6,13 +6,12 @@
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
-  <!-- Coverage: MTP-native collector. Wird zentral hier injiziert,
-       sodass die einzelnen Test-csprojs nichts mehr deklarieren muessen.
+  <!-- Coverage: coverlet.msbuild (MSBuild-driven, runner-agnostisch).
        Aktivieren via:
-         dotnet test ... -- --coverage --coverage-output-format cobertura
-       (Doppel-Strich trennt MSBuild-Args von MTP-Args.) -->
+         dotnet test ... /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=<dir>/
+       Funktioniert mit MTP und VSTest gleichermassen. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage">
+    <PackageReference Include="coverlet.msbuild">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>

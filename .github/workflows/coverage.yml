@@ -56,29 +56,23 @@ jobs:
       - name: Build
         run: dotnet build Kuestenlogik.Surgewave.Connectors.slnx --no-restore -c Release
 
-      # xUnit v3 + Microsoft.Testing.Platform (MTP): klassisches
-      # `--collect "XPlat Code Coverage"` von VSTest funktioniert NICHT
-      # mehr, MTP ignoriert das stumm und schreibt nichts.
-      # Stattdessen `--` Separator + MTP-native Coverage-Args:
-      # `--coverage --coverage-output-format cobertura`. Erfordert
-      # die PackageReference `Microsoft.Testing.Extensions.CodeCoverage`
-      # in den Test-Projekten (zentral via tests/Directory.Build.props).
-      #
-      # Filter via MTP geht ueber `--filter-trait` / `--filter-class`
-      # statt VSTest's `--filter`; Integration-Test-Exclude darum hier
-      # ueber das `FullyQualifiedName` per `--filter` — wenn das ueber
-      # MTP nicht greift, faengt die nachgelagerte Integration-Trait-
-      # Pruefung das auf.
+      # Coverage via coverlet.msbuild (MSBuild-driven). Funktioniert
+      # mit xUnit v3 + Microsoft.Testing.Platform genauso wie mit
+      # VSTest, weil Coverlet hier als MSBuild-Target laeuft, nicht
+      # als VSTest-Collector. Pro Test-Projekt entsteht eine
+      # coverage.cobertura.xml im jeweiligen Output-Verzeichnis;
+      # ReportGenerator findet sie via Glob.
       - name: Run tests with coverage
         run: |
-          mkdir -p artifacts/coverage/raw
           dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
             --filter "FullyQualifiedName!~IntegrationTests" \
             --verbosity minimal \
-            -- \
-            --coverage \
-            --coverage-output-format cobertura \
-            --coverage-output-folder $(pwd)/artifacts/coverage/raw
+            /p:CollectCoverage=true \
+            /p:CoverletOutputFormat=cobertura \
+            /p:CoverletOutput=$(pwd)/artifacts/coverage/raw/ \
+            /p:MergeWith=$(pwd)/artifacts/coverage/raw/coverage.json \
+            /p:Include="[Kuestenlogik.Surgewave.Connector.*]*" \
+            /p:Exclude="[*.Tests]*"
 
       - name: Generate coverage report
         uses: danielpalme/ReportGenerator-GitHub-Action@5
