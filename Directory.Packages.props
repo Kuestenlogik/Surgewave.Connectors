@@ -69,7 +69,10 @@
     <PackageVersion Include="Neo4j.Driver" Version="6.1.2" />
     <PackageVersion Include="GraphQL.Client" Version="6.1.0" />
     <PackageVersion Include="GraphQL.Client.Serializer.SystemTextJson" Version="6.1.0" />
-    <PackageVersion Include="Ical.Net" Version="5.2.2" />
+    <!-- HOLDBACK: 5.2.2 markiert RecurringComponent.RecurrenceRules
+         als deprecated (= build-error). Migration auf RecurrenceRule
+         (Singular) in eigenem PR. -->
+    <PackageVersion Include="Ical.Net" Version="5.2.0" />
     <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />
     <PackageVersion Include="SSH.NET" Version="2025.1.0" />
     <PackageVersion Include="MailKit" Version="4.16.0" />
@@ -79,7 +82,10 @@
     <PackageVersion Include="Google.Cloud.Storage.V1" Version="4.14.0" />
     <PackageVersion Include="Google.Apis.Drive.v3" Version="1.74.0.4135" />
     <PackageVersion Include="Google.Apis.PhotosLibrary.v1" Version="1.34.0.1223" />
-    <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.74.0.4145" />
+    <!-- HOLDBACK: 1.74.x deprecated GoogleCredential.FromJson/FromFile
+         als build-error. Migration auf CredentialFactory + ToGoogleCredential
+         in eigenem PR. -->
+    <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.70.0.3849" />
     <PackageVersion Include="Google.Cloud.Firestore" Version="4.2.0" />
     <PackageVersion Include="Google.Cloud.BigQuery.V2" Version="3.11.0" />
     <PackageVersion Include="Google.Cloud.Bigtable.V2" Version="3.27.0" />
@@ -142,7 +148,12 @@
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
     <PackageVersion Include="OpenAI" Version="2.10.0" />
-    <PackageVersion Include="Anthropic" Version="12.23.0" />
+    <!-- HOLDBACK auf 12.1.0: 12.23.0 entfernt AnthropicClient.APIKey
+         und markiert MessageCreateParams.Temperature/TopP/TopK als
+         obsolete (= CS0618 = build-error wegen TreatWarningsAsErrors).
+         Migration nach AnthropicClient(ClientOptions) + neuere
+         Param-API in eigenem PR. -->
+    <PackageVersion Include="Anthropic" Version="12.1.0" />
     <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.72.0" />
     <PackageVersion Include="Google.Cloud.Language.V1" Version="3.8.0" />
     <PackageVersion Include="OllamaSharp" Version="5.4.25" />
