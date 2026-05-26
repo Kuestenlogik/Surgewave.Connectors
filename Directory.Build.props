@@ -36,7 +36,14 @@
     <RepositoryUrl>https://github.com/Kuestenlogik/Surgewave.Connectors</RepositoryUrl>
     <PackageProjectUrl>https://github.com/Kuestenlogik/Surgewave.Connectors</PackageProjectUrl>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
+
+  <!-- icon.png aus dem Repo-Root in jedes NuGet einbetten. Quelle ist
+       scripts/icon.svg + scripts/generate-icon.js (sharp-based render). -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Link="icon.png" Visible="false" Condition="Exists('$(MSBuildThisFileDirectory)icon.png')" />
+  </ItemGroup>
 
   <!-- Version information -->
   <PropertyGroup Condition="'$(IsPackable)' != 'false'">
