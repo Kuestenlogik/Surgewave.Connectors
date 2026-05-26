@@ -17,7 +17,7 @@
     <!-- Surgewave MSBuild tasks for .swpkg packaging via 'dotnet publish -p:SurgewavePackPlugin=true' -->
     <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.1.0" />
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <!-- Coverage: coverlet.msbuild ist MSBuild-driven und funktioniert
@@ -28,18 +28,18 @@
     <PackageVersion Include="coverlet.msbuild" Version="6.0.4" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <!-- Logging -->
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.8" />
     <!-- Transitive security overrides:
          - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf (ZeroMQ-Connector).
          - Microsoft.Kiota.Abstractions 1.21.1 → GHSA-7j59-v9qr-6fq9 (OneDrive/Teams-Connector). -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.7" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
     <!-- JSON -->
     <PackageVersion Include="System.Text.Json" Version="9.0.0" />
@@ -54,104 +54,104 @@
     <PackageVersion Include="Parquet.Net" Version="5.5.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />
     <PackageVersion Include="MQTTnet" Version="5.1.0.1559" />
-    <PackageVersion Include="StackExchange.Redis" Version="2.10.14" />
-    <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="9.3.0" />
-    <PackageVersion Include="Npgsql" Version="10.0.1" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.13.10" />
+    <PackageVersion Include="Elastic.Clients.Elasticsearch" Version="9.4.1" />
+    <PackageVersion Include="Npgsql" Version="10.0.2" />
     <PackageVersion Include="Pgvector" Version="0.3.2" />
-    <PackageVersion Include="MongoDB.Driver" Version="3.6.0" />
+    <PackageVersion Include="MongoDB.Driver" Version="3.8.1" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.4" />
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.2" />
-    <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.100" />
-    <PackageVersion Include="Snowflake.Data" Version="5.4.0" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.200" />
+    <PackageVersion Include="Snowflake.Data" Version="5.6.0" />
     <PackageVersion Include="CassandraCSharpDriver" Version="3.22.0" />
-    <PackageVersion Include="TigerBeetle" Version="0.16.70" />
+    <PackageVersion Include="TigerBeetle" Version="0.17.4" />
     <PackageVersion Include="InfluxDB.Client" Version="5.0.0" />
-    <PackageVersion Include="Neo4j.Driver" Version="6.0.0" />
+    <PackageVersion Include="Neo4j.Driver" Version="6.1.2" />
     <PackageVersion Include="GraphQL.Client" Version="6.1.0" />
     <PackageVersion Include="GraphQL.Client.Serializer.SystemTextJson" Version="6.1.0" />
-    <PackageVersion Include="Ical.Net" Version="5.2.0" />
+    <PackageVersion Include="Ical.Net" Version="5.2.2" />
     <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />
     <PackageVersion Include="SSH.NET" Version="2025.1.0" />
-    <PackageVersion Include="MailKit" Version="4.14.1" />
+    <PackageVersion Include="MailKit" Version="4.16.0" />
     <!-- Cloud Storage -->
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.27.0" />
-    <PackageVersion Include="AWSSDK.S3" Version="4.0.18.2" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.28.0" />
+    <PackageVersion Include="AWSSDK.S3" Version="4.0.23.4" />
     <PackageVersion Include="Google.Cloud.Storage.V1" Version="4.14.0" />
-    <PackageVersion Include="Google.Apis.Drive.v3" Version="1.73.0.4045" />
+    <PackageVersion Include="Google.Apis.Drive.v3" Version="1.74.0.4135" />
     <PackageVersion Include="Google.Apis.PhotosLibrary.v1" Version="1.34.0.1223" />
-    <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.70.0.3849" />
-    <PackageVersion Include="Google.Cloud.Firestore" Version="4.1.0" />
+    <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.74.0.4145" />
+    <PackageVersion Include="Google.Cloud.Firestore" Version="4.2.0" />
     <PackageVersion Include="Google.Cloud.BigQuery.V2" Version="3.11.0" />
-    <PackageVersion Include="Google.Cloud.Bigtable.V2" Version="3.26.0" />
+    <PackageVersion Include="Google.Cloud.Bigtable.V2" Version="3.27.0" />
     <PackageVersion Include="Google.Cloud.Spanner.Data" Version="5.12.0" />
     <!-- Cloud Messaging -->
-    <PackageVersion Include="NATS.Net" Version="2.7.1" />
-    <PackageVersion Include="RabbitMQ.Client" Version="7.2.0" />
-    <PackageVersion Include="NetMQ" Version="4.0.2.2" />
+    <PackageVersion Include="NATS.Net" Version="2.8.0" />
+    <PackageVersion Include="RabbitMQ.Client" Version="7.2.1" />
+    <PackageVersion Include="NetMQ" Version="4.0.4.2" />
     <PackageVersion Include="NNanomsg" Version="0.5.2" />
-    <PackageVersion Include="DotPulsar" Version="5.1.2" />
+    <PackageVersion Include="DotPulsar" Version="5.3.1" />
     <PackageVersion Include="CloudNative.CloudEvents" Version="2.8.0" />
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="2.8.0" />
-    <PackageVersion Include="Google.Cloud.PubSub.V1" Version="3.32.0" />
-    <PackageVersion Include="AWSSDK.SQS" Version="4.0.2.11" />
-    <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.0.2.13" />
-    <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.5" />
-    <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.0.4.11" />
-    <PackageVersion Include="AWSSDK.Kinesis" Version="4.0.7.9" />
-    <PackageVersion Include="AWSSDK.Comprehend" Version="4.0.2.11" />
-    <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.0.14.6" />
-    <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.0.3.3" />
+    <PackageVersion Include="Google.Cloud.PubSub.V1" Version="3.34.0" />
+    <PackageVersion Include="AWSSDK.SQS" Version="4.0.2.32" />
+    <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.0.2.34" />
+    <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.18.5" />
+    <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.0.4.32" />
+    <PackageVersion Include="AWSSDK.Kinesis" Version="4.0.8.18" />
+    <PackageVersion Include="AWSSDK.Comprehend" Version="4.0.3.1" />
+    <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.0.19.1" />
+    <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.0.3.31" />
     <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
-    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.56.0" />
+    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.60.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.11.0" />
-    <PackageVersion Include="Azure.Storage.Queues" Version="12.22.0" />
+    <PackageVersion Include="Azure.Storage.Queues" Version="12.26.0" />
     <!-- Team Messaging -->
-    <PackageVersion Include="SlackNet" Version="0.17.9" />
+    <PackageVersion Include="SlackNet" Version="0.17.10" />
     <PackageVersion Include="Microsoft.Graph" Version="5.102.0" />
-    <PackageVersion Include="Azure.Identity" Version="1.17.1" />
-    <PackageVersion Include="Discord.Net" Version="3.18.0" />
-    <PackageVersion Include="Telegram.Bot" Version="22.8.1" />
-    <PackageVersion Include="XmppDotNet" Version="3.2.8" />
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
+    <PackageVersion Include="Discord.Net" Version="3.19.1" />
+    <PackageVersion Include="Telegram.Bot" Version="22.10.0.1" />
+    <PackageVersion Include="XmppDotNet" Version="3.3.0" />
     <PackageVersion Include="Mattermost.NET" Version="3.0.3" />
     <PackageVersion Include="Reddit" Version="1.5.2" />
     <PackageVersion Include="TweetinviAPI" Version="5.0.4" />
     <PackageVersion Include="NsqSharp.Core" Version="1.0.0" />
     <PackageVersion Include="Beanstalk.Core" Version="1.1.2" />
     <PackageVersion Include="AWSSDK.Neptune" Version="3.7.401.31" />
-    <PackageVersion Include="Gremlin.Net" Version="3.7.3" />
-    <PackageVersion Include="XmppDotNet.Transport.Socket" Version="3.2.8" />
-    <PackageVersion Include="XmppDotNet.Srv" Version="3.2.8" />
+    <PackageVersion Include="Gremlin.Net" Version="3.8.1" />
+    <PackageVersion Include="XmppDotNet.Transport.Socket" Version="3.3.0" />
+    <PackageVersion Include="XmppDotNet.Srv" Version="3.3.0" />
     <PackageVersion Include="System.Reactive" Version="6.1.0" />
     <!-- SAP -->
     <PackageVersion Include="Sap.Data.Hana.Core.v2.1" Version="2.20.22" />
     <PackageVersion Include="Simple.OData.Client" Version="6.0.1" />
     <!-- Orleans -->
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.0.1" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
     <!-- Actor Framework -->
-    <PackageVersion Include="Akka" Version="1.5.44" />
-    <PackageVersion Include="Akka.Cluster" Version="1.5.44" />
-    <PackageVersion Include="Akka.Cluster.Sharding" Version="1.5.44" />
-    <PackageVersion Include="Akka.Cluster.Tools" Version="1.5.44" />
-    <PackageVersion Include="Akka.Remote" Version="1.5.44" />
-    <PackageVersion Include="Akka.Streams" Version="1.5.44" />
+    <PackageVersion Include="Akka" Version="1.5.68" />
+    <PackageVersion Include="Akka.Cluster" Version="1.5.68" />
+    <PackageVersion Include="Akka.Cluster.Sharding" Version="1.5.68" />
+    <PackageVersion Include="Akka.Cluster.Tools" Version="1.5.68" />
+    <PackageVersion Include="Akka.Remote" Version="1.5.68" />
+    <PackageVersion Include="Akka.Streams" Version="1.5.68" />
     <!-- Smart Home -->
     <PackageVersion Include="Q42.HueApi" Version="3.24.0" />
     <!-- AI Connectors -->
-    <PackageVersion Include="DeepL.net" Version="1.19.0" />
+    <PackageVersion Include="DeepL.net" Version="1.21.0" />
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
-    <PackageVersion Include="OpenAI" Version="2.8.0" />
-    <PackageVersion Include="Anthropic" Version="12.1.0" />
-    <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.62.0" />
+    <PackageVersion Include="OpenAI" Version="2.10.0" />
+    <PackageVersion Include="Anthropic" Version="12.23.0" />
+    <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.72.0" />
     <PackageVersion Include="Google.Cloud.Language.V1" Version="3.8.0" />
-    <PackageVersion Include="OllamaSharp" Version="5.4.16" />
-    <PackageVersion Include="Qdrant.Client" Version="1.16.1" />
+    <PackageVersion Include="OllamaSharp" Version="5.4.25" />
+    <PackageVersion Include="Qdrant.Client" Version="1.18.1" />
     <!-- Scripting -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <!-- SignalR -->
-    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.8" />
     <!-- Utilities -->
-    <PackageVersion Include="Cronos" Version="0.11.1" />
+    <PackageVersion Include="Cronos" Version="0.13.0" />
   </ItemGroup>
 </Project>
