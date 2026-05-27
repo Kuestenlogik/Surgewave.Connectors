@@ -48,16 +48,9 @@ jobs:
         run: dotnet restore Kuestenlogik.Surgewave.Connectors.slnx
 
       - name: Build & Test
-        # Gcp.VertexAI-Tests sind nach dem Google.Cloud.AIPlatform.V1
-        # 3.62 -> 3.72 Update kurzzeitig fluky (1/36 fails, root cause
-        # noch nicht analysiert). Filter analog dem
-        # IntegrationTests-Filter im Hauptrepo, damit Release-Tags
-        # blockieren nicht. CI auf main laeuft den Test weiterhin
-        # und faengt Regressionen auf.
         run: |
           dotnet build Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-restore -p:Version=${{ steps.version.outputs.VERSION }}
-          dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -v normal \
-            --filter "FullyQualifiedName!~Gcp.VertexAI"
+          dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -v normal
 
       - name: Pack NuGet
         run: dotnet pack Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -o artifacts/packages -p:Version=${{ steps.version.outputs.VERSION }}

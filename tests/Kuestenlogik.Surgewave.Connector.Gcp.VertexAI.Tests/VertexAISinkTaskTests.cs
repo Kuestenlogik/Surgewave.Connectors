@@ -3,6 +3,7 @@ namespace Kuestenlogik.Surgewave.Connector.Gcp.VertexAI.Tests;
 using Kuestenlogik.Surgewave.Connect;
 using Xunit;
 
+[Collection(GoogleCloudProjectEnvCollection.Name)]
 public sealed class VertexAISinkTaskTests
 {
     [Fact]

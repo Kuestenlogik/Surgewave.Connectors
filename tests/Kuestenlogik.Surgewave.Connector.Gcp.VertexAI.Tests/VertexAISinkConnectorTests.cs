@@ -4,6 +4,7 @@ using Kuestenlogik.Surgewave.Plugins.Configuration;
 using Xunit;
 using Kuestenlogik.Surgewave.Connect;
 
+[Collection(GoogleCloudProjectEnvCollection.Name)]
 public sealed class VertexAISinkConnectorTests
 {
     [Fact]
