@@ -135,7 +135,7 @@
     <PackageVersion Include="Microsoft.Orleans.Client" Version="10.1.0" />
     <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
     <!-- Actor Framework -->
-    <PackageVersion Include="Akka" Version="1.5.68" />
+    <PackageVersion Include="Akka" Version="1.5.69" />
     <PackageVersion Include="Akka.Cluster" Version="1.5.68" />
     <PackageVersion Include="Akka.Cluster.Sharding" Version="1.5.68" />
     <PackageVersion Include="Akka.Cluster.Tools" Version="1.5.68" />
