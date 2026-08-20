@@ -31,14 +31,6 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Configure NuGet auth
-        run: >
-          dotnet nuget update source github
-          --username ${{ github.actor }}
-          --password ${{ secrets.KUESTENLOGIK_PACKAGES_TOKEN || secrets.GITHUB_TOKEN }}
-          --store-password-in-clear-text
-          --configfile nuget.config
-
       - name: Determine version
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
