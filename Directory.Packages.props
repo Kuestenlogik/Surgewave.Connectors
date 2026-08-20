@@ -20,7 +20,7 @@
     <PackageVersion Include="Kuestenlogik.Surgewave.Runtime" Version="0.5.0" />
     <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.5.0" />
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <!-- Coverage: coverlet.msbuild ist MSBuild-driven und funktioniert
@@ -63,7 +63,7 @@
     <PackageVersion Include="Npgsql" Version="10.0.2" />
     <PackageVersion Include="Pgvector" Version="0.3.2" />
     <PackageVersion Include="MongoDB.Driver" Version="3.8.1" />
-    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.4" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.8" />
     <PackageVersion Include="Oracle.ManagedDataAccess.Core" Version="23.26.200" />
     <PackageVersion Include="Snowflake.Data" Version="5.6.0" />
@@ -112,7 +112,7 @@
     <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.0.19.1" />
     <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.0.3.31" />
     <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
-    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.60.0" />
+    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.61.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.11.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.26.0" />
     <!-- Team Messaging -->
@@ -136,8 +136,8 @@
     <PackageVersion Include="Sap.Data.Hana.Core.v2.1" Version="2.20.22" />
     <PackageVersion Include="Simple.OData.Client" Version="6.0.1" />
     <!-- Orleans -->
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.1.0" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.1.0" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.2.1" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.2.1" />
     <!-- Actor Framework -->
     <PackageVersion Include="Akka" Version="1.5.69" />
     <PackageVersion Include="Akka.Cluster" Version="1.5.68" />
