@@ -13,12 +13,12 @@
     <PackageVersion Include="Microsoft.OpenApi" Version="2.9.0" />
 
     <!-- Surgewave Core (from local or CI NuGet feed) -->
-    <PackageVersion Include="Kuestenlogik.Surgewave.Plugins" Version="0.3.1" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Connect" Version="0.3.1" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Client" Version="0.3.1" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Testing" Version="0.3.1" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Runtime" Version="0.3.1" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.3.1" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Plugins" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Connect" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Client" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Testing" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Runtime" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.5.0" />
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
@@ -40,9 +40,10 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.8" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.8" />
     <!-- Transitive security overrides:
-         - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf (ZeroMQ-Connector).
+         - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf; 10.0.8 → GHSA-8q5v-6pqq-x66h u. a. (ZeroMQ-Connector).
+         - SSH.NET 2025.1.0 → advisory 2026-08 (Sftp-Connector) — direkter Bump auf 2026.0.0.
          - Microsoft.Kiota.Abstractions 1.21.1 → GHSA-7j59-v9qr-6fq9 (OneDrive/Teams-Connector). -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.8" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
     <!-- JSON -->
     <PackageVersion Include="System.Text.Json" Version="9.0.0" />
@@ -77,7 +78,7 @@
          (Singular) in eigenem PR. -->
     <PackageVersion Include="Ical.Net" Version="5.2.0" />
     <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />
-    <PackageVersion Include="SSH.NET" Version="2025.1.0" />
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="MailKit" Version="4.16.0" />
     <!-- Cloud Storage -->
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.28.0" />
