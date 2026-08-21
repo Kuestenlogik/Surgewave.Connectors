@@ -14,7 +14,7 @@ internal sealed class BeanstalkClient : IDisposable
     private int _readBufferPos;
     private int _readBufferLen;
     private TcpClient? _tcpClient;
-    private NetworkStream? _stream;
+    private Stream? _stream;
     private StreamWriter? _writer;
 
     public BeanstalkClient(string host, int port)
@@ -23,11 +23,26 @@ internal sealed class BeanstalkClient : IDisposable
         _port = port;
     }
 
+    /// <summary>
+    /// Wraps an already-connected stream instead of opening a TCP connection.
+    /// Test seam for exercising the wire protocol without a server.
+    /// </summary>
+    internal BeanstalkClient(Stream stream)
+        : this("", 0)
+    {
+        AttachStream(stream);
+    }
+
     public async Task ConnectAsync()
     {
         _tcpClient = new TcpClient();
         await _tcpClient.ConnectAsync(_host, _port);
-        _stream = _tcpClient.GetStream();
+        AttachStream(_tcpClient.GetStream());
+    }
+
+    private void AttachStream(Stream stream)
+    {
+        _stream = stream;
         // The beanstalkd protocol requires \r\n line termination regardless of platform.
         _writer = new StreamWriter(_stream, Encoding.ASCII) { AutoFlush = true, NewLine = "\r\n" };
         _readBufferPos = 0;

@@ -123,7 +123,7 @@ public sealed class TimescaleSinkTask : SinkTask
         }
     }
 
-    private object? ConvertJsonValue(JsonElement element, string columnName)
+    internal object? ConvertJsonValue(JsonElement element, string columnName)
     {
         // Handle time column specially
         if (columnName == _timeColumnField)

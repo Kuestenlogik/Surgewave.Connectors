@@ -21,6 +21,18 @@ public sealed class MattermostSinkTask : SinkTask
     private string _channelId = string.Empty;
     private string _messageField = MattermostConnectorConfig.DefaultMessageField;
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public MattermostSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that posts through an already-built HTTP client.
+    /// </summary>
+    internal MattermostSinkTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -30,14 +42,11 @@ public sealed class MattermostSinkTask : SinkTask
         _channelId = config[MattermostConnectorConfig.ChannelId];
         _messageField = config.TryGetValue(MattermostConnectorConfig.MessageField, out var mf) ? mf : MattermostConnectorConfig.DefaultMessageField;
 
-        _httpClient = new HttpClient
+        _httpClient ??= new HttpClient
         {
-            BaseAddress = new Uri(serverUrl),
-            DefaultRequestHeaders =
-            {
-                Authorization = new AuthenticationHeaderValue("Bearer", accessToken)
-            }
+            BaseAddress = new Uri(serverUrl)
         };
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)

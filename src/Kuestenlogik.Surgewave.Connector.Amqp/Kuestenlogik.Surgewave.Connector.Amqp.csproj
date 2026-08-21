@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Amqp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
   </ItemGroup>
 

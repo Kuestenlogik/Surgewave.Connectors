@@ -18,6 +18,7 @@ public sealed class TwitterSinkTask : SinkTask
         WriteIndented = false
     };
 
+    private readonly HttpMessageHandler? _handler;
     private HttpClient? _httpClient;
     private string _consumerKey = string.Empty;
     private string _consumerSecret = string.Empty;
@@ -27,6 +28,15 @@ public sealed class TwitterSinkTask : SinkTask
     private string? _replyToField;
 
     public override string Version => "1.0.0";
+
+    public TwitterSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Posts through a caller-supplied transport instead of a socket of its own.
+    /// </summary>
+    internal TwitterSinkTask(HttpMessageHandler handler) => _handler = handler;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -38,10 +48,8 @@ public sealed class TwitterSinkTask : SinkTask
         _textField = config.TryGetValue(TwitterConnectorConfig.TextField, out var tf) ? tf : "text";
         _replyToField = config.TryGetValue(TwitterConnectorConfig.ReplyToField, out var rtf) ? rtf : null;
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri("https://api.twitter.com/2/")
-        };
+        _httpClient = _handler == null ? new HttpClient() : new HttpClient(_handler, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri("https://api.twitter.com/2/");
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)

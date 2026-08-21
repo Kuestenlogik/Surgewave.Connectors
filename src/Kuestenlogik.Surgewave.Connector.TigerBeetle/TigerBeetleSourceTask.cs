@@ -28,6 +28,17 @@ public sealed class TigerBeetleSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        var (clusterId, addresses) = ApplyConfiguration(config);
+
+        _client = new TBClient(clusterId, addresses);
+    }
+
+    /// <summary>
+    /// Reads the task settings out of <paramref name="config"/> and returns the cluster
+    /// coordinates the TigerBeetle client is opened against.
+    /// </summary>
+    internal (UInt128 ClusterId, string[] Addresses) ApplyConfiguration(IDictionary<string, string> config)
+    {
         _topic = config[TigerBeetleConnectorConfig.Topic];
 
         var addresses = config[TigerBeetleConnectorConfig.ClusterAddresses]
@@ -56,7 +67,7 @@ public sealed class TigerBeetleSourceTask : SourceTask
                 .ToArray();
         }
 
-        _client = new TBClient(clusterId, addresses);
+        return (clusterId, addresses);
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
@@ -165,7 +176,7 @@ public sealed class TigerBeetleSourceTask : SourceTask
         return records;
     }
 
-    private SourceRecord CreateAccountRecord(Account account)
+    internal SourceRecord CreateAccountRecord(Account account)
     {
         var msgId = Interlocked.Increment(ref _messageId);
 
@@ -209,7 +220,7 @@ public sealed class TigerBeetleSourceTask : SourceTask
         };
     }
 
-    private SourceRecord CreateTransferRecord(Transfer transfer)
+    internal SourceRecord CreateTransferRecord(Transfer transfer)
     {
         var msgId = Interlocked.Increment(ref _messageId);
 

@@ -31,11 +31,20 @@ public sealed class AmqpSourceTask : SourceTask
         StartAsync(config).GetAwaiter().GetResult();
     }
 
-    private async Task StartAsync(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the topic/queue/ack settings from the connector configuration.
+    /// Split out of the async start-up so record mapping can be exercised without a broker.
+    /// </summary>
+    internal void ReadConfig(IDictionary<string, string> config)
     {
         _topic = config[AmqpConnectorConfig.Topic];
         _queue = config[AmqpConnectorConfig.SourceQueue];
         _autoAck = config.GetValueOrDefault(AmqpConnectorConfig.AutoAck, "false") == "true";
+    }
+
+    private async Task StartAsync(IDictionary<string, string> config)
+    {
+        ReadConfig(config);
 
         var prefetchCount = ushort.Parse(config.GetValueOrDefault(AmqpConnectorConfig.PrefetchCount,
             AmqpConnectorConfig.DefaultPrefetchCount.ToString())!);
@@ -73,7 +82,11 @@ public sealed class AmqpSourceTask : SourceTask
         await _channel.BasicConsumeAsync(_queue, _autoAck, consumer);
     }
 
-    private ConnectionFactory CreateConnectionFactory(IDictionary<string, string> config)
+    /// <summary>
+    /// Builds the RabbitMQ connection factory from the connector configuration.
+    /// Internal so the URI/host/SSL/heartbeat mapping can be verified without a broker.
+    /// </summary>
+    internal static ConnectionFactory CreateConnectionFactory(IDictionary<string, string> config)
     {
         var uri = config.GetValueOrDefault(AmqpConnectorConfig.Uri, "");
 
@@ -111,7 +124,10 @@ public sealed class AmqpSourceTask : SourceTask
         return factory;
     }
 
-    private Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs args)
+    /// <summary>
+    /// Buffers a delivery for the next poll. Internal so deliveries can be injected in tests.
+    /// </summary>
+    internal Task OnMessageReceivedAsync(object sender, BasicDeliverEventArgs args)
     {
         _messages.Enqueue((args, args.Body.ToArray()));
         return Task.CompletedTask;
@@ -135,7 +151,10 @@ public sealed class AmqpSourceTask : SourceTask
         return Task.FromResult<IReadOnlyList<SourceRecord>>(records);
     }
 
-    private SourceRecord CreateRecord(BasicDeliverEventArgs args, byte[] body)
+    /// <summary>
+    /// Maps an AMQP delivery to a source record. Internal so the header/key mapping is testable.
+    /// </summary>
+    internal SourceRecord CreateRecord(BasicDeliverEventArgs args, byte[] body)
     {
         var msgId = Interlocked.Increment(ref _messageId);
 

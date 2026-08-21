@@ -29,14 +29,29 @@ public sealed class NatsObjectStoreSourceTask : SourceTask
     private Task? _watchTask;
     private long _messageId;
 
+    /// <summary>
+    /// Creates a task that opens its own NATS connection when it is started.
+    /// </summary>
+    public NatsObjectStoreSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that watches an already-resolved object store.
+    /// </summary>
+    internal NatsObjectStoreSourceTask(INatsObjStore objectStore) => _objectStore = objectStore;
+
     public override string Version => "1.0.0";
 
-    public override void Start(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the watch and record-shaping configuration. Split out of <see cref="Start"/> so the
+    /// mapping from an object change to a <see cref="SourceRecord"/> can be exercised without a
+    /// live server.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
     {
         _topic = config[NatsObjectStoreConnectorConfig.Topic];
         _bucketName = config[NatsObjectStoreConnectorConfig.BucketName];
-        var servers = config.TryGetValue(NatsObjectStoreConnectorConfig.Servers, out var srvs)
-            ? srvs : NatsObjectStoreConnectorConfig.DefaultServer;
         _watchPrefix = config.TryGetValue(NatsObjectStoreConnectorConfig.WatchPrefix, out var watchPrefix) ? watchPrefix : null;
         _includeHistory = (config.TryGetValue(NatsObjectStoreConnectorConfig.IncludeHistory, out var includeHist) ? includeHist : "false") == "true";
         _includeDeletes = (config.TryGetValue(NatsObjectStoreConnectorConfig.IncludeDeletes, out var includeDeletes) ? includeDeletes : "true") == "true";
@@ -44,6 +59,14 @@ public sealed class NatsObjectStoreSourceTask : SourceTask
         _maxContentSize = config.TryGetValue(NatsObjectStoreConnectorConfig.MaxContentSize, out var maxContentSize) && !string.IsNullOrWhiteSpace(maxContentSize)
             ? int.Parse(maxContentSize, CultureInfo.InvariantCulture)
             : NatsObjectStoreConnectorConfig.DefaultMaxContentSize;
+    }
+
+    public override void Start(IDictionary<string, string> config)
+    {
+        Configure(config);
+
+        var servers = config.TryGetValue(NatsObjectStoreConnectorConfig.Servers, out var srvs)
+            ? srvs : NatsObjectStoreConnectorConfig.DefaultServer;
 
         // Build connection options
         var opts = new NatsOpts

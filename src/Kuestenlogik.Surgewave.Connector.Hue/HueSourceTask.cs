@@ -29,6 +29,18 @@ public sealed class HueSourceTask : SourceTask
     private Dictionary<string, string> _lastGroupStates = new();
     private Dictionary<string, string> _lastSceneStates = new();
     private long _messageId;
+    [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Test seam only: the caller owns and disposes the injected HttpClient")]
+    private readonly HttpClient? _httpClient;
+
+    public HueSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: talks to the bridge through a caller-supplied HttpClient, which the caller
+    /// also owns and disposes.
+    /// </summary>
+    internal HueSourceTask(HttpClient httpClient) => _httpClient = httpClient;
 
     public override string Version => "1.0.0";
 
@@ -45,7 +57,7 @@ public sealed class HueSourceTask : SourceTask
         _includeScenes = (config.TryGetValue(HueConnectorConfig.IncludeScenes, out var includeScenes) ? includeScenes : "false") == "true";
         _eventsOnly = (config.TryGetValue(HueConnectorConfig.EventsOnly, out var eventsOnly) ? eventsOnly : "true") == "true";
 
-        _client = new LocalHueClient(bridgeIp);
+        _client = _httpClient != null ? new LocalHueClient(bridgeIp, _httpClient) : new LocalHueClient(bridgeIp);
         _client.Initialize(appKey);
     }
 

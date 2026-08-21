@@ -20,7 +20,8 @@ public sealed class TelegramSourceTask : SourceTask
     private static readonly UpdateType[] AllowedUpdates =
         [UpdateType.Message, UpdateType.EditedMessage, UpdateType.ChannelPost, UpdateType.EditedChannelPost];
 
-    private TelegramBotClient? _client;
+    private readonly ITelegramBotClient? _injectedClient;
+    private ITelegramBotClient? _client;
     private string _topic = null!;
     private HashSet<long> _chatIds = [];
     private bool _includeGroups;
@@ -39,6 +40,15 @@ public sealed class TelegramSourceTask : SourceTask
 
     public override string Version => "1.0.0";
 
+    public TelegramSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Long-polls through a caller-supplied Bot API client instead of opening one of its own.
+    /// </summary>
+    internal TelegramSourceTask(ITelegramBotClient client) => _injectedClient = client;
+
     public override void Start(IDictionary<string, string> config)
     {
         var token = config[TelegramConnectorConfig.BotToken];
@@ -54,7 +64,7 @@ public sealed class TelegramSourceTask : SourceTask
                 .Select(long.Parse).ToHashSet();
         }
 
-        _client = new TelegramBotClient(token);
+        _client = _injectedClient ?? new TelegramBotClient(token);
 
         // The getUpdates cursor belongs to the bot, not to a single chat. The bot id is the
         // public part of the token, so it identifies the partition without storing the secret.

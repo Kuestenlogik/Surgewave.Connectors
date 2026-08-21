@@ -39,16 +39,7 @@ public sealed class XmppSourceTask : SourceTask
             ? res : XmppConnectorConfig.DefaultResource;
         var useTls = (config.TryGetValue(XmppConnectorConfig.UseTls, out var useTlsVal) ? useTlsVal : "true") == "true";
 
-        _topic = config[XmppConnectorConfig.Topic];
-        _includePresence = (config.TryGetValue(XmppConnectorConfig.IncludePresence, out var includePresence) ? includePresence : "true") == "true";
-        _includeGroupChat = (config.TryGetValue(XmppConnectorConfig.IncludeGroupChat, out var includeGroupChat) ? includeGroupChat : "true") == "true";
-
-        var filterJidsStr = config.TryGetValue(XmppConnectorConfig.FilterJids, out var filterJids) ? filterJids : "";
-        if (!string.IsNullOrWhiteSpace(filterJidsStr))
-        {
-            _filterJids = filterJidsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
+        ApplyConfig(config);
 
         // Use host as domain if not using SRV records
         // For custom host/port, configure DNS or use domain that resolves to the host
@@ -77,6 +68,24 @@ public sealed class XmppSourceTask : SourceTask
 
         // Connect asynchronously
         _ = ConnectAsync(config);
+    }
+
+    /// <summary>
+    /// Reads the settings that decide which stanzas become records. Split out of
+    /// <see cref="Start"/> so the stanza mapping can run without a live XMPP session.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
+        _topic = config[XmppConnectorConfig.Topic];
+        _includePresence = (config.TryGetValue(XmppConnectorConfig.IncludePresence, out var includePresence) ? includePresence : "true") == "true";
+        _includeGroupChat = (config.TryGetValue(XmppConnectorConfig.IncludeGroupChat, out var includeGroupChat) ? includeGroupChat : "true") == "true";
+
+        var filterJidsStr = config.TryGetValue(XmppConnectorConfig.FilterJids, out var filterJids) ? filterJids : "";
+        if (!string.IsNullOrWhiteSpace(filterJidsStr))
+        {
+            _filterJids = filterJidsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     private async Task ConnectAsync(IDictionary<string, string> config)
@@ -114,7 +123,11 @@ public sealed class XmppSourceTask : SourceTask
         }
     }
 
-    private void OnMessageReceived(Message message)
+    /// <summary>
+    /// Turns a received message stanza into a pending record, honouring the group-chat and JID
+    /// filters. Internal so the filtering can be tested without a live XMPP session.
+    /// </summary>
+    internal void OnMessageReceived(Message message)
     {
         try
         {

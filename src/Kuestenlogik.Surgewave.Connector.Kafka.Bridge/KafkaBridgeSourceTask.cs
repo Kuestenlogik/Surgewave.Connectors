@@ -134,22 +134,29 @@ public sealed class KafkaBridgeSourceTask : SourceTask
         return Task.FromResult<IReadOnlyList<SourceRecord>>(records);
     }
 
-    private string GetSurgewaveTopic(string kafkaTopic)
-    {
-        var result = _surgewaveTopicTemplate.Replace("${kafka.topic}", kafkaTopic);
+    private string GetSurgewaveTopic(string kafkaTopic) =>
+        MapTopic(_surgewaveTopicTemplate, kafkaTopic, _topicMappingEnabled, _topicMappingPrefix, _topicMappingSuffix);
 
-        if (_topicMappingEnabled)
+    /// <summary>
+    /// Resolves the Surgewave topic for a Kafka topic: <c>${kafka.topic}</c> substitution followed by
+    /// the optional prefix/suffix mapping.
+    /// </summary>
+    internal static string MapTopic(string template, string kafkaTopic, bool mappingEnabled, string prefix, string suffix)
+    {
+        var result = template.Replace("${kafka.topic}", kafkaTopic);
+
+        if (mappingEnabled)
         {
-            if (!string.IsNullOrEmpty(_topicMappingPrefix))
-                result = _topicMappingPrefix + result;
-            if (!string.IsNullOrEmpty(_topicMappingSuffix))
-                result = result + _topicMappingSuffix;
+            if (!string.IsNullOrEmpty(prefix))
+                result = prefix + result;
+            if (!string.IsNullOrEmpty(suffix))
+                result = result + suffix;
         }
 
         return result;
     }
 
-    private static Dictionary<string, byte[]> ConvertHeaders(Headers? kafkaHeaders, string topic, int partition, long offset)
+    internal static Dictionary<string, byte[]> ConvertHeaders(Headers? kafkaHeaders, string topic, int partition, long offset)
     {
         var headers = new Dictionary<string, byte[]>
         {

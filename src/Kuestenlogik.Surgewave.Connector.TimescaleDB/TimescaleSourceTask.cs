@@ -30,6 +30,9 @@ public sealed class TimescaleSourceTask : SourceTask
 
     public override string Version => "1.0.0";
 
+    /// <summary>The incremental cursor the next query reads from.</summary>
+    internal DateTime LastTimestamp => _lastTimestamp;
+
     public override void Start(IDictionary<string, string> config)
     {
         _topic = config[TimescaleConnectorConfig.Topic];
@@ -99,22 +102,7 @@ public sealed class TimescaleSourceTask : SourceTask
 
         _lastPoll = DateTime.UtcNow;
 
-        // Initialize start timestamp on first poll: resume from the stored offset,
-        // fall back to the lookback window for a fresh connector.
-        if (!_initialized)
-        {
-            _lastTimestamp = DateTime.UtcNow.AddSeconds(-_lookbackSeconds);
-
-            var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
-            if (storedOffset != null &&
-                storedOffset.TryGetValue("last_time", out var lastTime) &&
-                DateTime.TryParse(lastTime?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var stored))
-            {
-                _lastTimestamp = stored;
-            }
-
-            _initialized = true;
-        }
+        InitializeCursor();
 
         var records = new List<SourceRecord>();
 
@@ -155,7 +143,31 @@ public sealed class TimescaleSourceTask : SourceTask
         return records;
     }
 
-    private string BuildQuery()
+    /// <summary>
+    /// Positions the incremental cursor on the first poll: resume from the offset the previous
+    /// run stored, and fall back to the configured lookback window for a fresh connector.
+    /// </summary>
+    internal void InitializeCursor()
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        _lastTimestamp = DateTime.UtcNow.AddSeconds(-_lookbackSeconds);
+
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+        if (storedOffset != null &&
+            storedOffset.TryGetValue("last_time", out var lastTime) &&
+            DateTime.TryParse(lastTime?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var stored))
+        {
+            _lastTimestamp = stored;
+        }
+
+        _initialized = true;
+    }
+
+    internal string BuildQuery()
     {
         if (!string.IsNullOrWhiteSpace(_query))
         {

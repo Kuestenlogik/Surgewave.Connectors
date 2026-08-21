@@ -26,6 +26,16 @@ public sealed class BigtableSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ApplyConfig(config);
+        _client = BuildClient(config);
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from client construction so that mutation building
+    /// stays reachable without a Bigtable connection.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         var projectId = config[BigtableConnectorConfig.ProjectId];
         var instanceId = config[BigtableConnectorConfig.InstanceId];
         var tableId = config[BigtableConnectorConfig.TableId];
@@ -39,8 +49,10 @@ public sealed class BigtableSinkTask : SinkTask
             BigtableConnectorConfig.DefaultBatchSize.ToString())!);
 
         _tableName = new TableName(projectId, instanceId, tableId);
+    }
 
-        // Build client
+    private static BigtableClient BuildClient(IDictionary<string, string> config)
+    {
         var clientBuilder = new BigtableClientBuilder();
 
         var emulatorHost = config.GetValueOrDefault(BigtableConnectorConfig.EmulatorHost, null);
@@ -67,7 +79,7 @@ public sealed class BigtableSinkTask : SinkTask
 #pragma warning restore CS0618
         }
 
-        _client = clientBuilder.Build();
+        return clientBuilder.Build();
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
@@ -113,7 +125,7 @@ public sealed class BigtableSinkTask : SinkTask
         }
     }
 
-    private MutateRowsRequest.Types.Entry? CreateMutationEntry(SinkRecord record)
+    internal MutateRowsRequest.Types.Entry? CreateMutationEntry(SinkRecord record)
     {
         using var doc = JsonDocument.Parse(record.Value!);
         var root = doc.RootElement;
@@ -176,7 +188,7 @@ public sealed class BigtableSinkTask : SinkTask
         mutations.Add(mutation);
     }
 
-    private static byte[] DecodeCellValue(JsonElement value)
+    internal static byte[] DecodeCellValue(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("value", out var valueProp))
         {
@@ -257,7 +269,7 @@ public sealed class BigtableSinkTask : SinkTask
         }
     }
 
-    private ReadModifyWriteRule CreateReadModifyWriteRule(string family, string column, JsonElement value)
+    internal ReadModifyWriteRule CreateReadModifyWriteRule(string family, string column, JsonElement value)
     {
         if (_writeMode == "increment")
         {

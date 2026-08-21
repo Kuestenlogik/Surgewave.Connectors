@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Nats.ObjectStore.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NATS.Net" />
   </ItemGroup>
 

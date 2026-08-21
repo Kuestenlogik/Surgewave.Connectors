@@ -16,11 +16,22 @@ public sealed class InstagramSinkTask : SinkTask
         WriteIndented = false
     };
 
+    private readonly HttpMessageHandler? _transport;
     private HttpClient? _httpClient;
     private string _accessToken = string.Empty;
     private string _accountId = string.Empty;
     private string _captionField = "caption";
     private string _imageUrlField = "image_url";
+
+    public InstagramSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: routes the Graph API calls through <paramref name="transport"/> instead of the network.
+    /// The handler stays owned by the caller.
+    /// </summary>
+    internal InstagramSinkTask(HttpMessageHandler transport) => _transport = transport;
 
     public override string Version => "1.0.0";
 
@@ -42,10 +53,10 @@ public sealed class InstagramSinkTask : SinkTask
                 $"'{InstagramConnectorConfig.MediaType}' value '{mediaType}' is not supported - only 'image' is implemented");
         }
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri($"{InstagramConnectorConfig.BaseUrl}/{apiVersion}/")
-        };
+        _httpClient = _transport is null
+            ? new HttpClient()
+            : new HttpClient(_transport, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri($"{InstagramConnectorConfig.BaseUrl}/{apiVersion}/");
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)

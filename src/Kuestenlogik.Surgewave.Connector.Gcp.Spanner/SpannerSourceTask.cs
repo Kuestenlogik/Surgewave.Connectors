@@ -29,9 +29,16 @@ public sealed class SpannerSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
-        var projectId = config[SpannerConnectorConfig.ProjectId];
-        var instanceId = config[SpannerConnectorConfig.InstanceId];
-        var databaseId = config[SpannerConnectorConfig.DatabaseId];
+        ApplyConfig(config);
+        _connection = CreateConnection(config);
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from connection construction so that query and
+    /// timestamp-bound building stay reachable without a Spanner connection.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         _topic = config[SpannerConnectorConfig.Topic];
 
         _query = config.GetValueOrDefault(SpannerConnectorConfig.Query, null);
@@ -52,8 +59,14 @@ public sealed class SpannerSourceTask : SourceTask
         {
             _columns = columnsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
+    }
 
-        // Build connection string
+    private static SpannerConnection CreateConnection(IDictionary<string, string> config)
+    {
+        var projectId = config[SpannerConnectorConfig.ProjectId];
+        var instanceId = config[SpannerConnectorConfig.InstanceId];
+        var databaseId = config[SpannerConnectorConfig.DatabaseId];
+
         var connectionStringBuilder = new SpannerConnectionStringBuilder
         {
             DataSource = $"projects/{projectId}/instances/{instanceId}/databases/{databaseId}"
@@ -83,7 +96,7 @@ public sealed class SpannerSourceTask : SourceTask
             }
         }
 
-        _connection = new SpannerConnection(connectionStringBuilder);
+        return new SpannerConnection(connectionStringBuilder);
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
@@ -100,7 +113,7 @@ public sealed class SpannerSourceTask : SourceTask
         {
             await _connection!.OpenAsync(cancellationToken);
 
-            var sql = BuildQuery();
+            var sql = BuildQuery(_lastIncrementalValue);
             using var cmd = _connection.CreateSelectCommand(sql);
 
             // Add incremental parameter if needed
@@ -153,14 +166,19 @@ public sealed class SpannerSourceTask : SourceTask
         return records;
     }
 
-    private string BuildQuery()
+    /// <summary>
+    /// SQL for one poll. <paramref name="lastIncrementalValue"/> is the highest value of the
+    /// incremental column seen so far; it is passed in rather than read from the field so the
+    /// resume behaviour can be exercised on its own.
+    /// </summary>
+    internal string BuildQuery(object? lastIncrementalValue)
     {
         if (!string.IsNullOrWhiteSpace(_query))
         {
             var sql = _query!;
 
             // Add incremental filter if specified
-            if (_lastIncrementalValue != null && !string.IsNullOrEmpty(_incrementalColumn))
+            if (lastIncrementalValue != null && !string.IsNullOrEmpty(_incrementalColumn))
             {
                 if (sql.Contains("WHERE", StringComparison.OrdinalIgnoreCase))
                 {
@@ -188,7 +206,7 @@ public sealed class SpannerSourceTask : SourceTask
 
         var query = $"SELECT {columns} FROM {_table}";
 
-        if (_lastIncrementalValue != null && !string.IsNullOrEmpty(_incrementalColumn))
+        if (lastIncrementalValue != null && !string.IsNullOrEmpty(_incrementalColumn))
         {
             query += $" WHERE {_incrementalColumn} > @lastValue";
         }
@@ -220,7 +238,7 @@ public sealed class SpannerSourceTask : SourceTask
         };
     }
 
-    private TimestampBound GetTimestampBound()
+    internal TimestampBound GetTimestampBound()
     {
         return _timestampBound.ToLowerInvariant() switch
         {

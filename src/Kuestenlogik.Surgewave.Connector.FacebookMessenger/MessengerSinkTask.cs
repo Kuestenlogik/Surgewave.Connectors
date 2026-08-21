@@ -21,6 +21,7 @@ public sealed class MessengerSinkTask : SinkTask
     private const string MessageTypeText = "text";
     private const string MessageTypeQuickReplies = "quick_replies";
 
+    private readonly HttpMessageHandler? _handler;
     private HttpClient? _httpClient;
     private string? _defaultRecipientId;
     private string _recipientIdField = "recipient_id";
@@ -29,6 +30,15 @@ public sealed class MessengerSinkTask : SinkTask
     private string _quickRepliesField = "quick_replies";
 
     public override string Version => "1.0.0";
+
+    public MessengerSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Builds the Send API client on a caller-supplied transport instead of a socket of its own.
+    /// </summary>
+    internal MessengerSinkTask(HttpMessageHandler handler) => _handler = handler;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -50,10 +60,8 @@ public sealed class MessengerSinkTask : SinkTask
                 nameof(config));
         }
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri($"{MessengerConnectorConfig.BaseUrl}/{apiVersion}/")
-        };
+        _httpClient = _handler == null ? new HttpClient() : new HttpClient(_handler, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri($"{MessengerConnectorConfig.BaseUrl}/{apiVersion}/");
 
         // Send the page token as a bearer header - a query string ends up in proxy and
         // diagnostics logs.

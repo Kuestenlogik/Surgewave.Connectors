@@ -127,7 +127,7 @@ public sealed class SignalRSourceTask : SourceTask
         _connection.StartAsync().GetAwaiter().GetResult();
     }
 
-    private async Task EnqueueAsync(string hubUrl, string? key, string value)
+    internal async Task EnqueueAsync(string hubUrl, string? key, string value)
     {
         var msgId = Interlocked.Increment(ref _messageCount);
         var record = new SourceRecord

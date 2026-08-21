@@ -115,7 +115,7 @@ public sealed class InstagramSourceTask : SourceTask
                 using var reader = new StreamReader(context.Request.InputStream);
                 var body = await reader.ReadToEndAsync();
 
-                if (!IsSignatureValid(body, context.Request.Headers["X-Hub-Signature-256"]))
+                if (!IsSignatureValid(_appSecret, body, context.Request.Headers["X-Hub-Signature-256"]))
                 {
                     context.Response.StatusCode = 403;
                 }
@@ -142,10 +142,13 @@ public sealed class InstagramSourceTask : SourceTask
         }
     }
 
-    private bool IsSignatureValid(string body, string? signatureHeader)
+    /// <summary>
+    /// Validates Meta's <c>X-Hub-Signature-256</c> header against the raw request body.
+    /// </summary>
+    internal static bool IsSignatureValid(byte[]? appSecret, string body, string? signatureHeader)
     {
         // Without a configured app secret there is nothing to validate against.
-        if (_appSecret == null) return true;
+        if (appSecret == null) return true;
 
         if (string.IsNullOrEmpty(signatureHeader) ||
             !signatureHeader.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase))
@@ -163,7 +166,7 @@ public sealed class InstagramSourceTask : SourceTask
             return false;
         }
 
-        var actual = HMACSHA256.HashData(_appSecret, Encoding.UTF8.GetBytes(body));
+        var actual = HMACSHA256.HashData(appSecret, Encoding.UTF8.GetBytes(body));
         return CryptographicOperations.FixedTimeEquals(actual, expected);
     }
 

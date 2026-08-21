@@ -20,6 +20,7 @@ public sealed class WikipediaSourceTask : SourceTask
     private const int CategoryMemberLimit = 50;
 
     private readonly HashSet<int> _processedRevisions = [];
+    private readonly HttpMessageHandler? _messageHandler;
     private HttpClient? _httpClient;
     private string _topic = null!;
     private string _language = WikipediaConnectorConfig.DefaultLanguage;
@@ -40,6 +41,22 @@ public sealed class WikipediaSourceTask : SourceTask
     private long _messageId;
 
     public override string Version => "1.0.0";
+
+    /// <summary>
+    /// Creates a task that talks to the MediaWiki API over a default <see cref="HttpClient"/>.
+    /// </summary>
+    public WikipediaSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task whose HTTP traffic runs through <paramref name="messageHandler"/>. The handler
+    /// stays owned by the caller.
+    /// </summary>
+    internal WikipediaSourceTask(HttpMessageHandler messageHandler)
+    {
+        _messageHandler = messageHandler;
+    }
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -100,7 +117,9 @@ public sealed class WikipediaSourceTask : SourceTask
             }
         }
 
-        _httpClient = new HttpClient();
+        _httpClient = _messageHandler is null
+            ? new HttpClient()
+            : new HttpClient(_messageHandler, disposeHandler: false);
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "SurgewaveWikipediaConnector/1.0");
     }
 

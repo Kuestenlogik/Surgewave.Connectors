@@ -20,6 +20,17 @@ public sealed class TigerBeetleSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        var (clusterId, addresses) = ApplyConfiguration(config);
+
+        _client = new TBClient(clusterId, addresses);
+    }
+
+    /// <summary>
+    /// Reads the task settings out of <paramref name="config"/> and returns the cluster
+    /// coordinates the TigerBeetle client is opened against.
+    /// </summary>
+    internal (UInt128 ClusterId, string[] Addresses) ApplyConfiguration(IDictionary<string, string> config)
+    {
         var addresses = config[TigerBeetleConnectorConfig.ClusterAddresses]
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
@@ -34,7 +45,7 @@ public sealed class TigerBeetleSinkTask : SinkTask
         _batchSize = int.Parse(config.GetValueOrDefault(TigerBeetleConnectorConfig.BatchSize,
             TigerBeetleConnectorConfig.DefaultBatchSize.ToString())!);
 
-        _client = new TBClient(clusterId, addresses);
+        return (clusterId, addresses);
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
@@ -109,7 +120,7 @@ public sealed class TigerBeetleSinkTask : SinkTask
         }
     }
 
-    private Account? ParseAccount(JsonElement root)
+    internal Account? ParseAccount(JsonElement root)
     {
         if (!root.TryGetProperty("id", out var idProp))
         {
@@ -143,7 +154,7 @@ public sealed class TigerBeetleSinkTask : SinkTask
         return account;
     }
 
-    private Transfer? ParseTransfer(JsonElement root)
+    internal Transfer? ParseTransfer(JsonElement root)
     {
         if (!root.TryGetProperty("id", out var idProp))
         {

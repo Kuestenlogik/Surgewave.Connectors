@@ -23,10 +23,22 @@ public sealed class GoogleHomeSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ApplyConfig(config);
+        _service = CreateService(config);
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from credential and service construction so that
+    /// state building stays reachable without Home Graph credentials.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         _agentUserId = config[GoogleHomeConnectorConfig.AgentUserId];
         _defaultDeviceId = config.TryGetValue(GoogleHomeConnectorConfig.DefaultDeviceId, out var defaultDeviceId) ? defaultDeviceId : null;
+    }
 
-        // Initialize credentials
+    private static HomeGraphServiceService CreateService(IDictionary<string, string> config)
+    {
         GoogleCredential credential;
         var jsonCredentials = config.TryGetValue(GoogleHomeConnectorConfig.ServiceAccountJson, out var jsonCreds) ? jsonCreds : null;
         var fileCredentials = config.TryGetValue(GoogleHomeConnectorConfig.ServiceAccountFile, out var fileCreds) ? fileCreds : null;
@@ -46,7 +58,7 @@ public sealed class GoogleHomeSinkTask : SinkTask
                 .CreateScoped("https://www.googleapis.com/auth/homegraph");
         }
 
-        _service = new HomeGraphServiceService(new BaseClientService.Initializer
+        return new HomeGraphServiceService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
             ApplicationName = "Surgewave Connect"
@@ -111,7 +123,7 @@ public sealed class GoogleHomeSinkTask : SinkTask
         }
     }
 
-    private static Dictionary<string, object> BuildDeviceState(JsonElement root)
+    internal static Dictionary<string, object> BuildDeviceState(JsonElement root)
     {
         var state = new Dictionary<string, object>();
 
@@ -213,7 +225,7 @@ public sealed class GoogleHomeSinkTask : SinkTask
         return state;
     }
 
-    private static string? GetString(JsonElement element, string property, IReadOnlyDictionary<string, byte[]>? headers)
+    internal static string? GetString(JsonElement element, string property, IReadOnlyDictionary<string, byte[]>? headers)
     {
         if (element.TryGetProperty(property, out var prop))
             return prop.GetString();

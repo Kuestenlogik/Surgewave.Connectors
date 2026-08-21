@@ -264,7 +264,7 @@ public class RedditSinkTask : SinkTask
         }
     }
 
-    private (string? subreddit, JsonElement? json) ParseRecord(SinkRecord record)
+    internal (string? subreddit, JsonElement? json) ParseRecord(SinkRecord record)
     {
         JsonElement? json = null;
         string? subreddit = _defaultSubreddit;
@@ -293,7 +293,7 @@ public class RedditSinkTask : SinkTask
         return (subreddit, json);
     }
 
-    private static string? GetFieldValue(JsonElement? json, string? fieldName)
+    internal static string? GetFieldValue(JsonElement? json, string? fieldName)
     {
         if (json == null || string.IsNullOrEmpty(fieldName))
             return null;
@@ -313,7 +313,7 @@ public class RedditSinkTask : SinkTask
         return null;
     }
 
-    private static bool? GetBooleanField(JsonElement? json, string? fieldName)
+    internal static bool? GetBooleanField(JsonElement? json, string? fieldName)
     {
         if (json == null || string.IsNullOrEmpty(fieldName))
             return null;
@@ -340,7 +340,7 @@ public class RedditSinkTask : SinkTask
         return Encoding.UTF8.GetString(record.Value);
     }
 
-    private static string GetDefaultTitle(SinkRecord record)
+    internal static string GetDefaultTitle(SinkRecord record)
     {
         // Try to generate a title from the record
         if (record.Key != null && record.Key.Length > 0)

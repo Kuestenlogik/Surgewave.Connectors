@@ -26,6 +26,20 @@ public sealed class GooglePhotosSinkTask : SinkTask
     private ICredential? _credential;
     private GoogleAuthorizationCodeFlow? _authFlow;
 
+    public GooglePhotosSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: uploads through an already-built credential and HttpClient instead of
+    /// deriving both from config in Start.
+    /// </summary>
+    internal GooglePhotosSinkTask(ICredential credential, HttpClient httpClient)
+    {
+        _credential = credential;
+        _httpClient = httpClient;
+    }
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -118,7 +132,7 @@ public sealed class GooglePhotosSinkTask : SinkTask
         }
     }
 
-    private async Task<string> UploadBytesAsync(byte[] content, string filename, CancellationToken cancellationToken)
+    internal async Task<string> UploadBytesAsync(byte[] content, string filename, CancellationToken cancellationToken)
     {
         try
         {
@@ -188,7 +202,7 @@ public sealed class GooglePhotosSinkTask : SinkTask
         return album.Id;
     }
 
-    private static string GetMimeType(string filename)
+    internal static string GetMimeType(string filename)
     {
         var ext = Path.GetExtension(filename).ToLowerInvariant();
         return ext switch

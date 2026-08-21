@@ -150,7 +150,7 @@ internal sealed class SparkSinkTask : SinkTask, IDisposable
         }
     }
 
-    private SparkCommand ParseCommand(SinkRecord record)
+    internal SparkCommand ParseCommand(SinkRecord record)
     {
         if (record.Value == null || record.Value.Length == 0)
         {

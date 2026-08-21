@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Sap.OData.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
   </ItemGroup>
 

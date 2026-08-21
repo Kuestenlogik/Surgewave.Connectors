@@ -25,6 +25,20 @@ public sealed class SpaCySinkTask : ProcessorTask
     private bool _includeText;
     private bool _includeVectors;
     private string[]? _disablePipeline;
+    private readonly HttpMessageHandler? _transport;
+
+    public SpaCySinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: run the task against the given transport instead of a live spaCy server.
+    /// The caller keeps ownership of the handler.
+    /// </summary>
+    internal SpaCySinkTask(HttpMessageHandler transport)
+    {
+        _transport = transport;
+    }
 
     public override string Version => "1.0.0";
 
@@ -60,7 +74,9 @@ public sealed class SpaCySinkTask : ProcessorTask
             _disablePipeline = disableStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
 
-        _httpClient = new HttpClient();
+        _httpClient = _transport is null
+            ? new HttpClient()
+            : new HttpClient(_transport, disposeHandler: false);
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
@@ -120,7 +136,7 @@ public sealed class SpaCySinkTask : ProcessorTask
         }
     }
 
-    private object BuildOutput(string text, JsonElement result)
+    internal object BuildOutput(string text, JsonElement result)
     {
         var output = new Dictionary<string, object?>();
 

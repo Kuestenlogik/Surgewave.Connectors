@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Surgewave.Bridge.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
     <PackageReference Include="Kuestenlogik.Surgewave.Client" />
   </ItemGroup>

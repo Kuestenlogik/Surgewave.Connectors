@@ -21,6 +21,18 @@ public sealed class RocketChatSinkTask : SinkTask
     private string? _roomIdField;
     private string _textField = "text";
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public RocketChatSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that posts through an already-built HTTP client.
+    /// </summary>
+    internal RocketChatSinkTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -36,7 +48,7 @@ public sealed class RocketChatSinkTask : SinkTask
         _roomIdField = config.TryGetValue(RocketChatConnectorConfig.RoomIdField, out var rif) ? rif : null;
         _textField = config.TryGetValue(RocketChatConnectorConfig.TextField, out var tf) ? tf : "text";
 
-        _httpClient = new HttpClient
+        _httpClient ??= new HttpClient
         {
             BaseAddress = new Uri(serverUrl)
         };

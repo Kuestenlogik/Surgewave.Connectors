@@ -28,6 +28,18 @@ public sealed class RocketChatSourceTask : SourceTask
     private DateTimeOffset _lastPollTime = DateTimeOffset.UtcNow;
     private readonly Dictionary<string, DateTimeOffset> _lastMessageTimes = new();
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public RocketChatSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that polls through an already-built HTTP client.
+    /// </summary>
+    internal RocketChatSourceTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -51,7 +63,7 @@ public sealed class RocketChatSourceTask : SourceTask
 
         _includeBotMessages = config.TryGetValue(RocketChatConnectorConfig.IncludeBotMessages, out var ibm) && ibm == "true";
 
-        _httpClient = new HttpClient
+        _httpClient ??= new HttpClient
         {
             BaseAddress = new Uri(serverUrl)
         };

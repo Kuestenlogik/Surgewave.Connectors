@@ -34,7 +34,11 @@ public sealed class NsqSourceTask : SourceTask, IHandler
     private readonly Dictionary<string, object> _sourcePartition = new();
     private readonly List<IMessage> _pendingMessages = [];
 
-    public override void Start(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the consumer and record-shaping configuration. Split out of <see cref="Start"/> so
+    /// the handler-to-poll message flow can be exercised without a live nsqd connection.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
     {
         _nsqdAddress = config.TryGetValue(NsqConnectorConfig.NsqdAddress, out var nsqd) ? nsqd : NsqConnectorConfig.DefaultNsqdAddress;
         _nsqLookupdAddresses = config.TryGetValue(NsqConnectorConfig.NsqLookupdAddresses, out var lookupd) ? lookupd : "";
@@ -56,6 +60,11 @@ public sealed class NsqSourceTask : SourceTask, IHandler
         _sourcePartition["connector"] = "nsq";
         _sourcePartition["topic"] = _nsqTopic;
         _sourcePartition["channel"] = _nsqChannel;
+    }
+
+    public override void Start(IDictionary<string, string> config)
+    {
+        Configure(config);
 
         _cts = new CancellationTokenSource();
 

@@ -37,6 +37,18 @@ public sealed class MattermostSourceTask : SourceTask
     private HashSet<string> _discoveredChannels = [];
     private DateTimeOffset _channelsDiscoveredAt = DateTimeOffset.MinValue;
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public MattermostSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that polls through an already-built HTTP client.
+    /// </summary>
+    internal MattermostSourceTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -59,14 +71,11 @@ public sealed class MattermostSourceTask : SourceTask
         _includeBotMessages = config.TryGetValue(MattermostConnectorConfig.IncludeBotMessages, out var ibm) && ibm == "true";
 
         // Create HTTP client
-        _httpClient = new HttpClient
+        _httpClient ??= new HttpClient
         {
-            BaseAddress = new Uri(_serverUrl),
-            DefaultRequestHeaders =
-            {
-                Authorization = new AuthenticationHeaderValue("Bearer", accessToken)
-            }
+            BaseAddress = new Uri(_serverUrl)
         };
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

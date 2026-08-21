@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Spark.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
   </ItemGroup>
 

@@ -14,6 +14,9 @@ namespace Kuestenlogik.Surgewave.Connector.Xmpp;
 /// </summary>
 public sealed class XmppSinkTask : SinkTask
 {
+    /// <summary>Number of 100 ms slices <see cref="PutAsync"/> waits for the session to bind.</summary>
+    private const int DefaultConnectWaitAttempts = 50;
+
     private XmppClient? _client;
     private string? _defaultRecipient;
     private MessageType _defaultMessageType;
@@ -21,6 +24,12 @@ public sealed class XmppSinkTask : SinkTask
     private IDisposable? _stateSubscription;
 
     public override string Version => "1.0.0";
+
+    /// <summary>
+    /// How many 100 ms slices a batch waits for the XMPP session to bind before it is failed.
+    /// Overridable so tests do not have to sit through the full production budget.
+    /// </summary>
+    internal int ConnectWaitAttempts { get; init; } = DefaultConnectWaitAttempts;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -37,13 +46,7 @@ public sealed class XmppSinkTask : SinkTask
         _defaultRecipient = config.TryGetValue(XmppConnectorConfig.DefaultRecipient, out var defaultRecipient) ? defaultRecipient : null;
         var msgTypeStr = config.TryGetValue(XmppConnectorConfig.MessageType, out var msgType)
             ? msgType : XmppConnectorConfig.DefaultMessageType;
-        _defaultMessageType = msgTypeStr.ToLowerInvariant() switch
-        {
-            "groupchat" => MessageType.GroupChat,
-            "normal" => MessageType.Normal,
-            "headline" => MessageType.Headline,
-            _ => MessageType.Chat
-        };
+        _defaultMessageType = ParseMessageType(msgTypeStr);
 
         // Use host as domain if not using SRV records
         // For custom host/port, configure DNS or use domain that resolves to the host
@@ -70,7 +73,7 @@ public sealed class XmppSinkTask : SinkTask
     {
         // Wait for connection if needed
         var retries = 0;
-        while (!_isConnected && retries < 50)
+        while (!_isConnected && retries < ConnectWaitAttempts)
         {
             await Task.Delay(100, cancellationToken);
             retries++;
@@ -105,13 +108,7 @@ public sealed class XmppSinkTask : SinkTask
                 var typeStr = GetString(root, "type", record.Headers);
                 if (!string.IsNullOrEmpty(typeStr))
                 {
-                    msgType = typeStr.ToLowerInvariant() switch
-                    {
-                        "groupchat" => MessageType.GroupChat,
-                        "normal" => MessageType.Normal,
-                        "headline" => MessageType.Headline,
-                        _ => MessageType.Chat
-                    };
+                    msgType = ParseMessageType(typeStr);
                 }
 
                 // Create and send message
@@ -150,7 +147,23 @@ public sealed class XmppSinkTask : SinkTask
         }
     }
 
-    private static string? GetString(JsonElement element, string property, IReadOnlyDictionary<string, byte[]>? headers)
+    /// <summary>
+    /// Maps a configured or per-record message type onto the XMPP stanza type; anything unknown
+    /// falls back to a regular chat message.
+    /// </summary>
+    internal static MessageType ParseMessageType(string value) => value.ToLowerInvariant() switch
+    {
+        "groupchat" => MessageType.GroupChat,
+        "normal" => MessageType.Normal,
+        "headline" => MessageType.Headline,
+        _ => MessageType.Chat
+    };
+
+    /// <summary>
+    /// Reads a stanza field from the record payload, falling back to the matching
+    /// <c>xmpp.*</c> header.
+    /// </summary>
+    internal static string? GetString(JsonElement element, string property, IReadOnlyDictionary<string, byte[]>? headers)
     {
         if (element.TryGetProperty(property, out var prop))
             return prop.GetString();

@@ -18,6 +18,7 @@ public sealed class TwitterSourceTask : SourceTask
         WriteIndented = false
     };
 
+    private readonly HttpMessageHandler? _handler;
     private HttpClient? _httpClient;
     private string _topic = string.Empty;
     private string? _searchQuery;
@@ -33,16 +34,23 @@ public sealed class TwitterSourceTask : SourceTask
 
     public override string Version => "1.0.0";
 
+    public TwitterSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Reads the API through a caller-supplied transport instead of a socket of its own.
+    /// </summary>
+    internal TwitterSourceTask(HttpMessageHandler handler) => _handler = handler;
+
     public override void Start(IDictionary<string, string> config)
     {
         _topic = config[TwitterConnectorConfig.Topic];
 
         var bearerToken = config[TwitterConnectorConfig.BearerToken];
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri("https://api.twitter.com/2/")
-        };
+        _httpClient = _handler == null ? new HttpClient() : new HttpClient(_handler, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri("https://api.twitter.com/2/");
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
 
         _searchQuery = config.TryGetValue(TwitterConnectorConfig.SearchQuery, out var sq) ? sq : null;

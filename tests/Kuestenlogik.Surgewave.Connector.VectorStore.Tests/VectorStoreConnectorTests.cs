@@ -2,9 +2,11 @@ using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
 using Kuestenlogik.Surgewave.Connector.VectorStore;
+using Kuestenlogik.Surgewave.Plugins.Configuration;
 
 namespace Kuestenlogik.Surgewave.Connector.VectorStore.Tests;
 
+[Collection("VectorStoreRegistry")]
 public class VectorStoreConnectorTests : IDisposable
 {
     public VectorStoreConnectorTests()
@@ -267,10 +269,10 @@ public class VectorStoreConnectorTests : IDisposable
 
         // Verify importance levels
         var collectionKey = connector.Config.Keys.First(k => k.Name == "collection.name");
-        Assert.Equal(Connect.Configuration.Importance.High, collectionKey.Importance);
+        Assert.Equal(Importance.High, collectionKey.Importance);
 
         var persistenceKey = connector.Config.Keys.First(k => k.Name == "persistence.topic");
-        Assert.Equal(Connect.Configuration.Importance.Low, persistenceKey.Importance);
+        Assert.Equal(Importance.Low, persistenceKey.Importance);
     }
 
     [Fact]
@@ -286,9 +288,9 @@ public class VectorStoreConnectorTests : IDisposable
 
         // Verify importance levels
         var topicKey = connector.Config.Keys.First(k => k.Name == "topic");
-        Assert.Equal(Connect.Configuration.Importance.High, topicKey.Importance);
+        Assert.Equal(Importance.High, topicKey.Importance);
 
         var topKKey = connector.Config.Keys.First(k => k.Name == "top.k");
-        Assert.Equal(Connect.Configuration.Importance.Medium, topKKey.Importance);
+        Assert.Equal(Importance.Medium, topKKey.Importance);
     }
 }

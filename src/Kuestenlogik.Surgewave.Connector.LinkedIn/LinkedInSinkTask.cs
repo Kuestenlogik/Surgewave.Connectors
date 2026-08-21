@@ -17,12 +17,23 @@ public sealed class LinkedInSinkTask : SinkTask
         WriteIndented = false
     };
 
+    private readonly HttpMessageHandler? _transport;
     private HttpClient? _httpClient;
     private string _accessToken = string.Empty;
     private string? _organizationId;
     private string? _personId;
     private string _textField = "text";
     private string _defaultVisibility = "PUBLIC";
+
+    public LinkedInSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: routes the Marketing API calls through <paramref name="transport"/> instead of the
+    /// network. The handler stays owned by the caller.
+    /// </summary>
+    internal LinkedInSinkTask(HttpMessageHandler transport) => _transport = transport;
 
     public override string Version => "1.0.0";
 
@@ -36,10 +47,10 @@ public sealed class LinkedInSinkTask : SinkTask
         _defaultVisibility = config.TryGetValue(LinkedInConnectorConfig.DefaultVisibility, out var dv)
             ? dv : LinkedInConnectorConfig.DefaultVisibilityValue;
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri(LinkedInConnectorConfig.BaseUrl)
-        };
+        _httpClient = _transport is null
+            ? new HttpClient()
+            : new HttpClient(_transport, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri(LinkedInConnectorConfig.BaseUrl);
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
         _httpClient.DefaultRequestHeaders.Add("X-Restli-Protocol-Version", "2.0.0");
     }

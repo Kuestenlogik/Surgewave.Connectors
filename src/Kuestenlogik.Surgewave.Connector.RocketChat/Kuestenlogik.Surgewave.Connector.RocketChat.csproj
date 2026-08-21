@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.RocketChat.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Kuestenlogik.Surgewave.Connect" />
   </ItemGroup>
 

@@ -24,12 +24,22 @@ public sealed class PulsarSinkTask : SinkTask
 
     public override string Version => "1.0.0";
 
-    public override void Start(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the topic-routing configuration. Split out of <see cref="Start"/> so the mapping from
+    /// a Surgewave topic to a Pulsar topic can be exercised without a live broker.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
     {
-        _serviceUrl = config.TryGetValue(PulsarConnectorConfig.ServiceUrl, out var serviceUrl) ? serviceUrl : PulsarConnectorConfig.DefaultServiceUrl;
         _pulsarTopicTemplate = config[PulsarConnectorConfig.Topic];
         _topicMappingEnabled = (config.TryGetValue(PulsarConnectorConfig.TopicMappingEnabled, out var topicMappingEnabled) ? topicMappingEnabled : "false") == "true";
         _topicMappingPrefix = config.TryGetValue(PulsarConnectorConfig.TopicMappingPrefix, out var topicMappingPrefix) ? topicMappingPrefix : "";
+    }
+
+    public override void Start(IDictionary<string, string> config)
+    {
+        Configure(config);
+
+        _serviceUrl = config.TryGetValue(PulsarConnectorConfig.ServiceUrl, out var serviceUrl) ? serviceUrl : PulsarConnectorConfig.DefaultServiceUrl;
 
         var clientBuilder = PulsarClient.Builder()
             .ServiceUrl(new Uri(_serviceUrl));
@@ -71,7 +81,7 @@ public sealed class PulsarSinkTask : SinkTask
         }
     }
 
-    private string GetPulsarTopic(string surgewaveTopic)
+    internal string GetPulsarTopic(string surgewaveTopic)
     {
         var result = _pulsarTopicTemplate.Replace("${surgewave.topic}", surgewaveTopic);
 

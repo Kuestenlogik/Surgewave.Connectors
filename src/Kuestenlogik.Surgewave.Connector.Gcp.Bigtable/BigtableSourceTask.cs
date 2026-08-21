@@ -33,6 +33,16 @@ public sealed class BigtableSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ApplyConfig(config);
+        _client = BuildClient(config);
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from client construction so that row set, filter
+    /// and record building stay reachable without a Bigtable connection.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         var projectId = config[BigtableConnectorConfig.ProjectId];
         var instanceId = config[BigtableConnectorConfig.InstanceId];
         var tableId = config[BigtableConnectorConfig.TableId];
@@ -55,8 +65,10 @@ public sealed class BigtableSourceTask : SourceTask
         }
 
         _tableName = new TableName(projectId, instanceId, tableId);
+    }
 
-        // Build client
+    private static BigtableClient BuildClient(IDictionary<string, string> config)
+    {
         var clientBuilder = new BigtableClientBuilder();
 
         var emulatorHost = config.GetValueOrDefault(BigtableConnectorConfig.EmulatorHost, null);
@@ -83,7 +95,7 @@ public sealed class BigtableSourceTask : SourceTask
 #pragma warning restore CS0618
         }
 
-        _client = clientBuilder.Build();
+        return clientBuilder.Build();
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
@@ -99,7 +111,7 @@ public sealed class BigtableSourceTask : SourceTask
         try
         {
             // Build row set
-            var rowSet = BuildRowSet();
+            var rowSet = BuildRowSet(_lastRowKey);
 
             // Build filter
             var filter = BuildFilter();
@@ -132,11 +144,16 @@ public sealed class BigtableSourceTask : SourceTask
         return records;
     }
 
-    private RowSet BuildRowSet()
+    /// <summary>
+    /// Row set for one poll. <paramref name="lastRowKey"/> is the key of the last row already
+    /// emitted; it takes precedence over the configured start so that every poll advances
+    /// instead of re-reading the head of the range.
+    /// </summary>
+    internal RowSet BuildRowSet(string? lastRowKey)
     {
         var rowSet = new RowSet();
 
-        // _lastRowKey was read from within the configured range, so continuing after it
+        // lastRowKey was read from within the configured range, so continuing after it
         // (exclusive) stays inside the range and advances past already-emitted rows.
         if (!string.IsNullOrEmpty(_rowKeyPrefix))
         {
@@ -151,9 +168,9 @@ public sealed class BigtableSourceTask : SourceTask
             {
                 EndKeyOpen = ByteString.CopyFrom(endBytes)
             };
-            if (!string.IsNullOrEmpty(_lastRowKey))
+            if (!string.IsNullOrEmpty(lastRowKey))
             {
-                range.StartKeyOpen = ByteString.CopyFromUtf8(_lastRowKey);
+                range.StartKeyOpen = ByteString.CopyFromUtf8(lastRowKey);
             }
             else
             {
@@ -164,9 +181,9 @@ public sealed class BigtableSourceTask : SourceTask
         else if (!string.IsNullOrEmpty(_rowKeyStart) || !string.IsNullOrEmpty(_rowKeyEnd))
         {
             var range = new RowRange();
-            if (!string.IsNullOrEmpty(_lastRowKey))
+            if (!string.IsNullOrEmpty(lastRowKey))
             {
-                range.StartKeyOpen = ByteString.CopyFromUtf8(_lastRowKey);
+                range.StartKeyOpen = ByteString.CopyFromUtf8(lastRowKey);
             }
             else if (!string.IsNullOrEmpty(_rowKeyStart))
             {
@@ -178,19 +195,19 @@ public sealed class BigtableSourceTask : SourceTask
             }
             rowSet.RowRanges.Add(range);
         }
-        else if (!string.IsNullOrEmpty(_lastRowKey))
+        else if (!string.IsNullOrEmpty(lastRowKey))
         {
             // Continue from last row key
             rowSet.RowRanges.Add(new RowRange
             {
-                StartKeyOpen = ByteString.CopyFromUtf8(_lastRowKey)
+                StartKeyOpen = ByteString.CopyFromUtf8(lastRowKey)
             });
         }
 
         return rowSet;
     }
 
-    private RowFilter? BuildFilter()
+    internal RowFilter? BuildFilter()
     {
         var filters = new List<RowFilter>();
 
@@ -225,7 +242,7 @@ public sealed class BigtableSourceTask : SourceTask
         };
     }
 
-    private SourceRecord CreateRecord(Row row)
+    internal SourceRecord CreateRecord(Row row)
     {
         var msgId = Interlocked.Increment(ref _messageId);
         var rowKey = row.Key.ToStringUtf8();

@@ -110,31 +110,38 @@ public sealed class KafkaBridgeSinkTask : SinkTask
         }
     }
 
-    private string GetKafkaTopic(string surgewaveTopic)
+    private string GetKafkaTopic(string surgewaveTopic) =>
+        MapTopic(_kafkaTopicOverride, surgewaveTopic, _topicMappingEnabled, _topicMappingPrefix, _topicMappingSuffix);
+
+    /// <summary>
+    /// Resolves the Kafka topic for a Surgewave topic: the optional override with
+    /// <c>${surgewave.topic}</c> substitution, followed by the optional prefix/suffix mapping.
+    /// </summary>
+    internal static string MapTopic(string? kafkaTopicOverride, string surgewaveTopic, bool mappingEnabled, string prefix, string suffix)
     {
         string result;
 
-        if (!string.IsNullOrEmpty(_kafkaTopicOverride))
+        if (!string.IsNullOrEmpty(kafkaTopicOverride))
         {
-            result = _kafkaTopicOverride.Replace("${surgewave.topic}", surgewaveTopic);
+            result = kafkaTopicOverride.Replace("${surgewave.topic}", surgewaveTopic);
         }
         else
         {
             result = surgewaveTopic;
         }
 
-        if (_topicMappingEnabled)
+        if (mappingEnabled)
         {
-            if (!string.IsNullOrEmpty(_topicMappingPrefix))
-                result = _topicMappingPrefix + result;
-            if (!string.IsNullOrEmpty(_topicMappingSuffix))
-                result = result + _topicMappingSuffix;
+            if (!string.IsNullOrEmpty(prefix))
+                result = prefix + result;
+            if (!string.IsNullOrEmpty(suffix))
+                result = result + suffix;
         }
 
         return result;
     }
 
-    private static Headers ConvertHeaders(SinkRecord record)
+    internal static Headers ConvertHeaders(SinkRecord record)
     {
         var headers = new Headers();
 

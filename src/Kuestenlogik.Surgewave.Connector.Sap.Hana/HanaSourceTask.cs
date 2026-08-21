@@ -195,7 +195,7 @@ public sealed class HanaSourceTask : SourceTask
         return records;
     }
 
-    private string BuildQuery()
+    internal string BuildQuery()
     {
         if (!string.IsNullOrWhiteSpace(_query))
         {

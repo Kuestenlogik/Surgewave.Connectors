@@ -40,8 +40,7 @@ public sealed class WhatsAppSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
-        _topic = config[WhatsAppConnectorConfig.Topic];
-        _verifyToken = config[WhatsAppConnectorConfig.WebhookVerifyToken];
+        ApplyConfig(config);
 
         var port = config.TryGetValue(WhatsAppConnectorConfig.WebhookPort, out var p)
             ? int.Parse(p) : WhatsAppConnectorConfig.DefaultWebhookPort;
@@ -54,6 +53,31 @@ public sealed class WhatsAppSourceTask : SourceTask
 
         _cts = new CancellationTokenSource();
         _listenerTask = ListenAsync(_cts.Token);
+    }
+
+    /// <summary>
+    /// Reads the settings the webhook handling depends on. Split out of <see cref="Start"/> so the
+    /// payload path can run without binding a listener port.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
+        _topic = config[WhatsAppConnectorConfig.Topic];
+        _verifyToken = config[WhatsAppConnectorConfig.WebhookVerifyToken];
+    }
+
+    /// <summary>
+    /// Parses a webhook POST body and buffers it for the next poll. Buffering happens before the
+    /// caller writes its 200, so a full channel delays the ack instead of dropping the payload,
+    /// and a malformed body throws instead of being acknowledged.
+    /// </summary>
+    internal async Task EnqueueWebhookBodyAsync(string body, CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Deserialize<WhatsAppWebhookPayload>(body, JsonOptions);
+
+        if (payload != null)
+        {
+            await _messageChannel.Writer.WriteAsync(payload, cancellationToken);
+        }
     }
 
     private async Task ListenAsync(CancellationToken ct)
@@ -102,12 +126,7 @@ public sealed class WhatsAppSourceTask : SourceTask
             {
                 using var reader = new StreamReader(context.Request.InputStream);
                 var body = await reader.ReadToEndAsync();
-                var payload = JsonSerializer.Deserialize<WhatsAppWebhookPayload>(body, JsonOptions);
-
-                if (payload != null)
-                {
-                    await _messageChannel.Writer.WriteAsync(payload, ct);
-                }
+                await EnqueueWebhookBodyAsync(body, ct);
 
                 context.Response.StatusCode = 200;
             }

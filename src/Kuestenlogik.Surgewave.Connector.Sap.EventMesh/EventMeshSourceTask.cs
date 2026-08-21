@@ -34,6 +34,18 @@ public sealed class EventMeshSourceTask : SourceTask
     private readonly List<string> _pendingAcks = new();
     private readonly JsonEventFormatter _formatter = new();
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public EventMeshSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that consumes through an already-built HTTP client.
+    /// </summary>
+    internal EventMeshSourceTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -52,7 +64,7 @@ public sealed class EventMeshSourceTask : SourceTask
         _ackMode = config.GetValueOrDefault(EventMeshConnectorConfig.AckMode,
             EventMeshConnectorConfig.DefaultAckMode)!;
 
-        _httpClient = new HttpClient();
+        _httpClient ??= new HttpClient();
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

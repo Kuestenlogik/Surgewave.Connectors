@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Nanomsg.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NNanomsg" />
   </ItemGroup>
 

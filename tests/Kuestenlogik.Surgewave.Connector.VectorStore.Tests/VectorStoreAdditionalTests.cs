@@ -9,6 +9,7 @@ namespace Kuestenlogik.Surgewave.Connector.VectorStore.Tests;
 /// Additional tests for vector operations, similarity search edge cases,
 /// connector configuration, and sink task parsing.
 /// </summary>
+[Collection("VectorStoreRegistry")]
 public sealed class VectorStoreAdditionalTests : IDisposable
 {
     public VectorStoreAdditionalTests()

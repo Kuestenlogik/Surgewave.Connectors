@@ -24,6 +24,20 @@ public sealed class ODataSinkTask : SinkTask
     private string[]? _keyFields;
     private int _batchSize;
     private bool _useBatch;
+    private readonly HttpMessageHandler? _transport;
+
+    public ODataSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: run the task against the given transport instead of a live SAP service.
+    /// The caller keeps ownership of the handler.
+    /// </summary>
+    internal ODataSinkTask(HttpMessageHandler transport)
+    {
+        _transport = transport;
+    }
 
     public override string Version => "1.0.0";
 
@@ -56,13 +70,23 @@ public sealed class ODataSinkTask : SinkTask
         var timeoutSeconds = int.Parse(config.GetValueOrDefault(ODataConnectorConfig.TimeoutSeconds,
             ODataConnectorConfig.DefaultTimeoutSeconds.ToString())!);
 
-        var handler = new HttpClientHandler();
-        if (ignoreCertErrors)
+        HttpMessageHandler handler;
+        var ownsHandler = _transport is null;
+        if (ownsHandler)
         {
-            handler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+            var liveHandler = new HttpClientHandler();
+            if (ignoreCertErrors)
+            {
+                liveHandler.ServerCertificateCustomValidationCallback = (_, _, _, _) => true;
+            }
+            handler = liveHandler;
+        }
+        else
+        {
+            handler = _transport!;
         }
 
-        var client = new HttpClient(handler)
+        var client = new HttpClient(handler, ownsHandler)
         {
             BaseAddress = new Uri(serviceUrl),
             Timeout = TimeSpan.FromSeconds(timeoutSeconds)

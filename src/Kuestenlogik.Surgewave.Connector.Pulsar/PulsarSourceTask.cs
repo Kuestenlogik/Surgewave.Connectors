@@ -26,14 +26,36 @@ public sealed class PulsarSourceTask : SourceTask
     private readonly ConcurrentDictionary<SourceRecord, MessageId> _pendingAcks = new(ReferenceEqualityComparer.Instance);
     private readonly ConcurrentQueue<MessageId> _committedAcks = new();
 
+    /// <summary>
+    /// Creates a task that opens its own Pulsar client when it is started.
+    /// </summary>
+    public PulsarSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that consumes through an already-built consumer.
+    /// </summary>
+    internal PulsarSourceTask(IConsumer<ReadOnlySequence<byte>> consumer) => _consumer = consumer;
+
     public override string Version => "1.0.0";
 
-    public override void Start(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the topic-routing configuration. Split out of <see cref="Start"/> so the mapping from
+    /// a Pulsar message to a <see cref="SourceRecord"/> can be exercised without a live broker.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
     {
-        var serviceUrl = config.TryGetValue(PulsarConnectorConfig.ServiceUrl, out var svcUrl) ? svcUrl : PulsarConnectorConfig.DefaultServiceUrl;
         _surgewaveTopicTemplate = config[PulsarConnectorConfig.Topic];
         _topicMappingEnabled = (config.TryGetValue(PulsarConnectorConfig.TopicMappingEnabled, out var topicMappingEnabled) ? topicMappingEnabled : "false") == "true";
         _topicMappingPrefix = config.TryGetValue(PulsarConnectorConfig.TopicMappingPrefix, out var topicMappingPrefix) ? topicMappingPrefix : "";
+    }
+
+    public override void Start(IDictionary<string, string> config)
+    {
+        Configure(config);
+
+        var serviceUrl = config.TryGetValue(PulsarConnectorConfig.ServiceUrl, out var svcUrl) ? svcUrl : PulsarConnectorConfig.DefaultServiceUrl;
 
         var clientBuilder = PulsarClient.Builder()
             .ServiceUrl(new Uri(serviceUrl));
@@ -146,7 +168,7 @@ public sealed class PulsarSourceTask : SourceTask
         }
     }
 
-    private string GetSurgewaveTopic(string pulsarTopic)
+    internal string GetSurgewaveTopic(string pulsarTopic)
     {
         // Extract topic name from full Pulsar topic (persistent://tenant/namespace/topic)
         var topicName = pulsarTopic;
@@ -166,7 +188,7 @@ public sealed class PulsarSourceTask : SourceTask
         return result;
     }
 
-    private static Dictionary<string, byte[]> ConvertProperties(IMessage<ReadOnlySequence<byte>> message, string topic)
+    internal static Dictionary<string, byte[]> ConvertProperties(IMessage<ReadOnlySequence<byte>> message, string topic)
     {
         var headers = new Dictionary<string, byte[]>
         {

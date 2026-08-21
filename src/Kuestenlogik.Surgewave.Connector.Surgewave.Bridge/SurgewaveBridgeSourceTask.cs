@@ -244,7 +244,7 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
     /// Resumes a partition where the previous run left off, falling back to the configured
     /// earliest/latest start when nothing has been committed for it yet.
     /// </summary>
-    private async Task<long> ResolveStartOffsetAsync(string topic, int partition, CancellationToken cancellationToken)
+    internal async Task<long> ResolveStartOffsetAsync(string topic, int partition, CancellationToken cancellationToken)
     {
         if (_offsetTrackingEnabled)
         {
@@ -272,7 +272,7 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         ["partition"] = partition
     };
 
-    private string GetTargetTopic(string sourceTopic)
+    internal string GetTargetTopic(string sourceTopic)
     {
         var result = _targetTopicTemplate;
 
@@ -316,7 +316,7 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
     /// Builds a checkpoint of the source offsets that are confirmed replicated, so a
     /// failover target can pick the replication up where this task left it.
     /// </summary>
-    private SourceRecord? CreateCheckpointRecord()
+    internal SourceRecord? CreateCheckpointRecord()
     {
         if (_committedOffsets.IsEmpty)
             return null;

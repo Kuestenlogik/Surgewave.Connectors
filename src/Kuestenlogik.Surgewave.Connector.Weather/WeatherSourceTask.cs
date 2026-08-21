@@ -14,6 +14,7 @@ namespace Kuestenlogik.Surgewave.Connector.Weather;
 public sealed class WeatherSourceTask : SourceTask
 {
     private readonly List<(string name, double lat, double lon, bool resolved)> _locations = [];
+    private readonly HttpMessageHandler? _messageHandler;
     private HttpClient? _httpClient;
     private string _topic = null!;
     private string _provider = null!;
@@ -27,6 +28,22 @@ public sealed class WeatherSourceTask : SourceTask
     private long _messageId;
 
     public override string Version => "1.0.0";
+
+    /// <summary>
+    /// Creates a task that talks to the weather APIs over a default <see cref="HttpClient"/>.
+    /// </summary>
+    public WeatherSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task whose HTTP traffic runs through <paramref name="messageHandler"/>. The handler
+    /// stays owned by the caller.
+    /// </summary>
+    internal WeatherSourceTask(HttpMessageHandler messageHandler)
+    {
+        _messageHandler = messageHandler;
+    }
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -68,7 +85,9 @@ public sealed class WeatherSourceTask : SourceTask
                 nameof(config));
         }
 
-        _httpClient = new HttpClient();
+        _httpClient = _messageHandler is null
+            ? new HttpClient()
+            : new HttpClient(_messageHandler, disposeHandler: false);
     }
 
     /// <summary>

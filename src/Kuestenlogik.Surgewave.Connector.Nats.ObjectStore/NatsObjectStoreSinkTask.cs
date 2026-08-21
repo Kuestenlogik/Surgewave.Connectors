@@ -23,13 +23,27 @@ public sealed class NatsObjectStoreSinkTask : SinkTask
     private string? _contentType;
     private int _chunkSize;
 
+    /// <summary>
+    /// Creates a task that opens its own NATS connection when it is started.
+    /// </summary>
+    public NatsObjectStoreSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that writes to an already-resolved object store.
+    /// </summary>
+    internal NatsObjectStoreSinkTask(INatsObjStore objectStore) => _objectStore = objectStore;
+
     public override string Version => "1.0.0";
 
-    public override void Start(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the object-shaping configuration. Split out of <see cref="Start"/> so the mapping
+    /// from a <see cref="SinkRecord"/> to an object write can be exercised without a live server.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
     {
         _bucketName = config[NatsObjectStoreConnectorConfig.BucketName];
-        var servers = config.TryGetValue(NatsObjectStoreConnectorConfig.Servers, out var srvs)
-            ? srvs : NatsObjectStoreConnectorConfig.DefaultServer;
         _createBucket = (config.TryGetValue(NatsObjectStoreConnectorConfig.CreateBucket, out var createBkt) ? createBkt : "true") == "true";
         _objectNameField = config.TryGetValue(NatsObjectStoreConnectorConfig.ObjectNameField, out var objNameField) ? objNameField : "name";
         _objectNamePrefix = config.TryGetValue(NatsObjectStoreConnectorConfig.ObjectNamePrefix, out var objNamePrefix) ? objNamePrefix : null;
@@ -37,6 +51,14 @@ public sealed class NatsObjectStoreSinkTask : SinkTask
         _chunkSize = config.TryGetValue(NatsObjectStoreConnectorConfig.ChunkSize, out var chunkSize) && !string.IsNullOrWhiteSpace(chunkSize)
             ? int.Parse(chunkSize, CultureInfo.InvariantCulture)
             : NatsObjectStoreConnectorConfig.DefaultChunkSize;
+    }
+
+    public override void Start(IDictionary<string, string> config)
+    {
+        Configure(config);
+
+        var servers = config.TryGetValue(NatsObjectStoreConnectorConfig.Servers, out var srvs)
+            ? srvs : NatsObjectStoreConnectorConfig.DefaultServer;
 
         // Build connection options
         var opts = new NatsOpts

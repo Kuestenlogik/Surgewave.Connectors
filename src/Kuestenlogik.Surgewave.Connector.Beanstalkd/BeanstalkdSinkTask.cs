@@ -25,6 +25,24 @@ public sealed class BeanstalkdSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ReadConfig(config);
+
+        _cts = new CancellationTokenSource();
+        ConnectAsync().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Applies the configuration and attaches an already-connected client, skipping the TCP
+    /// connect/use handshake. Test seam for verifying the put command without a beanstalkd server.
+    /// </summary>
+    internal void StartWith(IDictionary<string, string> config, BeanstalkClient client)
+    {
+        ReadConfig(config);
+        _client = client;
+    }
+
+    private void ReadConfig(IDictionary<string, string> config)
+    {
         _host = config.TryGetValue(BeanstalkdConnectorConfig.Host, out var host)
             ? host : BeanstalkdConnectorConfig.DefaultHost;
         _port = config.TryGetValue(BeanstalkdConnectorConfig.Port, out var port)
@@ -38,9 +56,6 @@ public sealed class BeanstalkdSinkTask : SinkTask
             _delaySeconds = int.Parse(delay);
         if (config.TryGetValue(BeanstalkdConnectorConfig.TtrSeconds, out var ttr))
             _ttrSeconds = int.Parse(ttr);
-
-        _cts = new CancellationTokenSource();
-        ConnectAsync().GetAwaiter().GetResult();
     }
 
     private async Task ConnectAsync()

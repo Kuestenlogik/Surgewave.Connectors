@@ -31,6 +31,18 @@ public sealed class EventMeshSinkTask : SinkTask
     private DateTime _tokenExpiry = DateTime.MinValue;
     private readonly JsonEventFormatter _formatter = new();
 
+    /// <summary>
+    /// Creates a task that opens its own HTTP client when it is started.
+    /// </summary>
+    public EventMeshSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Creates a task that publishes through an already-built HTTP client.
+    /// </summary>
+    internal EventMeshSinkTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
@@ -48,7 +60,7 @@ public sealed class EventMeshSinkTask : SinkTask
         _batchSize = int.Parse(config.GetValueOrDefault(EventMeshConnectorConfig.BatchSize,
             EventMeshConnectorConfig.DefaultBatchSize.ToString())!);
 
-        _httpClient = new HttpClient();
+        _httpClient ??= new HttpClient();
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)

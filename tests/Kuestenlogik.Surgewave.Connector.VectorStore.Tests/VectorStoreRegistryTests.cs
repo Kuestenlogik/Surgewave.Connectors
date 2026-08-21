@@ -5,6 +5,7 @@ namespace Kuestenlogik.Surgewave.Connector.VectorStore.Tests;
 /// <summary>
 /// Tests for the VectorStoreRegistry shared instance management.
 /// </summary>
+[Collection("VectorStoreRegistry")]
 public sealed class VectorStoreRegistryTests : IDisposable
 {
     public VectorStoreRegistryTests()

@@ -21,6 +21,21 @@ internal static class RedditAuthenticator
         CancellationToken cancellationToken)
     {
         using var http = new HttpClient();
+        return await FetchAccessTokenAsync(http, clientId, clientSecret, username, password, userAgent, cancellationToken);
+    }
+
+    /// <summary>
+    /// Fetches an access token over an already-built <see cref="HttpClient"/>.
+    /// </summary>
+    public static async Task<(string AccessToken, DateTimeOffset ExpiresAt)> FetchAccessTokenAsync(
+        HttpClient http,
+        string clientId,
+        string? clientSecret,
+        string username,
+        string password,
+        string userAgent,
+        CancellationToken cancellationToken)
+    {
         using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue(
             "Basic",

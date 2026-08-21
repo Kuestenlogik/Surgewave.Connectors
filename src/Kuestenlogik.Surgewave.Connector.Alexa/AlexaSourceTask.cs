@@ -42,6 +42,24 @@ public sealed class AlexaSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ReadConfig(config);
+
+        _httpClient = new HttpClient();
+        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+    }
+
+    /// <summary>
+    /// Starts the task against an already-built <see cref="HttpClient"/> instead of opening one
+    /// against the live Alexa API. Test seam for driving the task through a stubbed transport.
+    /// </summary>
+    internal void StartWith(IDictionary<string, string> config, HttpClient httpClient)
+    {
+        ReadConfig(config);
+        _httpClient = httpClient;
+    }
+
+    private void ReadConfig(IDictionary<string, string> config)
+    {
         _clientId = config[AlexaConnectorConfig.ClientId];
         _clientSecret = config[AlexaConnectorConfig.ClientSecret];
         _refreshToken = config[AlexaConnectorConfig.RefreshToken];
@@ -62,9 +80,6 @@ public sealed class AlexaSourceTask : SourceTask
             _filterEndpointIds = filterStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToHashSet();
         }
-
-        _httpClient = new HttpClient();
-        _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

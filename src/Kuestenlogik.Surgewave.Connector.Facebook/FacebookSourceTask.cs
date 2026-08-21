@@ -159,13 +159,17 @@ public sealed class FacebookSourceTask : SourceTask
         }
     }
 
-    private bool IsSignatureValid(HttpListenerRequest request, byte[] body)
+    private bool IsSignatureValid(HttpListenerRequest request, byte[] body) =>
+        IsSignatureValid(_appSecret, request.Headers[FacebookConnectorConfig.SignatureHeader], body);
+
+    /// <summary>
+    /// Verifies the X-Hub-Signature-256 header of a delivery against the app secret.
+    /// </summary>
+    internal static bool IsSignatureValid(byte[]? secret, string? header, byte[] body)
     {
         // Signature verification is opt-in: without an app secret there is nothing to verify against.
-        var secret = _appSecret;
         if (secret == null) return true;
 
-        var header = request.Headers[FacebookConnectorConfig.SignatureHeader];
         if (string.IsNullOrEmpty(header) || !header.StartsWith(SignaturePrefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;

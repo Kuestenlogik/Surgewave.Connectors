@@ -32,6 +32,16 @@ public sealed class GoogleHomeSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ApplyConfig(config);
+        _service = CreateService(config);
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from credential and service construction so that
+    /// device filtering and record building stay reachable without Home Graph credentials.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         _agentUserId = config[GoogleHomeConnectorConfig.AgentUserId];
         _topic = config[GoogleHomeConnectorConfig.Topic];
         _pollIntervalMs = int.Parse(config.TryGetValue(GoogleHomeConnectorConfig.PollIntervalMs, out var pollInterval)
@@ -49,8 +59,10 @@ public sealed class GoogleHomeSourceTask : SourceTask
             _filterDeviceIds = filterStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToHashSet();
         }
+    }
 
-        // Initialize credentials
+    private static HomeGraphServiceService CreateService(IDictionary<string, string> config)
+    {
         GoogleCredential credential;
         var jsonCredentials = config.TryGetValue(GoogleHomeConnectorConfig.ServiceAccountJson, out var jsonCreds) ? jsonCreds : null;
         var fileCredentials = config.TryGetValue(GoogleHomeConnectorConfig.ServiceAccountFile, out var fileCreds) ? fileCreds : null;
@@ -70,7 +82,7 @@ public sealed class GoogleHomeSourceTask : SourceTask
                 .CreateScoped("https://www.googleapis.com/auth/homegraph");
         }
 
-        _service = new HomeGraphServiceService(new BaseClientService.Initializer
+        return new HomeGraphServiceService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
             ApplicationName = "Surgewave Connect"
@@ -168,7 +180,7 @@ public sealed class GoogleHomeSourceTask : SourceTask
         return devices;
     }
 
-    private bool ShouldIncludeDeviceType(string deviceType)
+    internal bool ShouldIncludeDeviceType(string deviceType)
     {
         return deviceType switch
         {
@@ -182,7 +194,7 @@ public sealed class GoogleHomeSourceTask : SourceTask
         };
     }
 
-    private SourceRecord CreateDeviceRecord(string deviceId, string deviceType, IDictionary<string, object>? state)
+    internal SourceRecord CreateDeviceRecord(string deviceId, string deviceType, IDictionary<string, object>? state)
     {
         var payload = new
         {

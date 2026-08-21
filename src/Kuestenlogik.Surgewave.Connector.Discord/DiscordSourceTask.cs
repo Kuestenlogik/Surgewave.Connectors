@@ -86,6 +86,11 @@ public sealed class DiscordSourceTask : SourceTask
         });
     }
 
+    /// <summary>
+    /// Single entry point into the pending queue - every gateway handler queues through here.
+    /// </summary>
+    internal void EnqueueRecord(SourceRecord record) => _pendingRecords.Enqueue(record);
+
     private Task OnReady()
     {
         _readyTcs.TrySetResult();
@@ -97,7 +102,7 @@ public sealed class DiscordSourceTask : SourceTask
         if (!ShouldProcess(message)) return Task.CompletedTask;
 
         var record = CreateMessageRecord(message, "message_create");
-        _pendingRecords.Enqueue(record);
+        EnqueueRecord(record);
         return Task.CompletedTask;
     }
 
@@ -106,7 +111,7 @@ public sealed class DiscordSourceTask : SourceTask
         if (!ShouldProcess(after)) return;
 
         var record = CreateMessageRecord(after, "message_update");
-        _pendingRecords.Enqueue(record);
+        EnqueueRecord(record);
     }
 
     private Task OnMessageDeleted(Cacheable<IMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel)
@@ -133,21 +138,21 @@ public sealed class DiscordSourceTask : SourceTask
             }
         };
 
-        _pendingRecords.Enqueue(record);
+        EnqueueRecord(record);
         return Task.CompletedTask;
     }
 
     private Task OnReactionAdded(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction)
     {
         var record = CreateReactionRecord(message.Id, channel.Id, reaction, "reaction_add");
-        _pendingRecords.Enqueue(record);
+        EnqueueRecord(record);
         return Task.CompletedTask;
     }
 
     private Task OnReactionRemoved(Cacheable<IUserMessage, ulong> message, Cacheable<IMessageChannel, ulong> channel, SocketReaction reaction)
     {
         var record = CreateReactionRecord(message.Id, channel.Id, reaction, "reaction_remove");
-        _pendingRecords.Enqueue(record);
+        EnqueueRecord(record);
         return Task.CompletedTask;
     }
 

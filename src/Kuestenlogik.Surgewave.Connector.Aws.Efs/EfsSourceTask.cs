@@ -32,6 +32,22 @@ public sealed class EfsSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ReadConfig(config);
+        _efsClient = CreateClient(config);
+    }
+
+    /// <summary>
+    /// Starts the task against an already-built EFS client instead of building one from the
+    /// configuration. Test seam for driving polling without calling AWS.
+    /// </summary>
+    internal void StartWith(IDictionary<string, string> config, AmazonElasticFileSystemClient client)
+    {
+        ReadConfig(config);
+        _efsClient = client;
+    }
+
+    private void ReadConfig(IDictionary<string, string> config)
+    {
         _topic = config[EfsConnectorConfig.TopicConfig];
         _region = GetConfigValue(config, EfsConnectorConfig.RegionConfig, EfsConnectorConfig.DefaultRegion);
         _pollIntervalMs = int.Parse(GetConfigValue(config, EfsConnectorConfig.PollIntervalMsConfig, EfsConnectorConfig.DefaultPollIntervalMs.ToString()));
@@ -44,10 +60,15 @@ public sealed class EfsSourceTask : SourceTask
             _fileSystemIds = fileSystemIdsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    private static AmazonElasticFileSystemClient CreateClient(IDictionary<string, string> config)
+    {
+        var region = GetConfigValue(config, EfsConnectorConfig.RegionConfig, EfsConnectorConfig.DefaultRegion);
 
         var clientConfig = new AmazonElasticFileSystemConfig
         {
-            RegionEndpoint = RegionEndpoint.GetBySystemName(_region)
+            RegionEndpoint = RegionEndpoint.GetBySystemName(region)
         };
 
         var endpoint = GetConfigValue(config, EfsConnectorConfig.EndpointConfig, "");
@@ -62,12 +83,10 @@ public sealed class EfsSourceTask : SourceTask
         if (!string.IsNullOrEmpty(accessKey) && !string.IsNullOrEmpty(secretKey))
         {
             var credentials = new BasicAWSCredentials(accessKey, secretKey);
-            _efsClient = new AmazonElasticFileSystemClient(credentials, clientConfig);
+            return new AmazonElasticFileSystemClient(credentials, clientConfig);
         }
-        else
-        {
-            _efsClient = new AmazonElasticFileSystemClient(clientConfig);
-        }
+
+        return new AmazonElasticFileSystemClient(clientConfig);
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)

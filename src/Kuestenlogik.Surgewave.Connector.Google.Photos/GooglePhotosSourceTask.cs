@@ -36,9 +36,30 @@ public sealed class GooglePhotosSourceTask : SourceTask
     private long _messageId;
     private HttpClient? _httpClient;
 
+    public GooglePhotosSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: downloads media content through a caller-supplied HttpClient instead of
+    /// creating one in Start.
+    /// </summary>
+    internal GooglePhotosSourceTask(HttpClient httpClient) => _httpClient = httpClient;
+
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
+    {
+        ApplyConfig(config);
+        _service = CreateService(config);
+        _httpClient ??= new HttpClient();
+    }
+
+    /// <summary>
+    /// Reads the task settings. Separated from credential and service construction so that
+    /// filter and record building stay reachable without Google Photos credentials.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
     {
         _topic = config[GooglePhotosConnectorConfig.Topic];
         _albumId = config.TryGetValue(GooglePhotosConnectorConfig.AlbumId, out var albumId) ? albumId : null;
@@ -65,8 +86,10 @@ public sealed class GooglePhotosSourceTask : SourceTask
         {
             _albumNames = albums.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
         }
+    }
 
-        // Initialize Google Photos API client
+    private PhotosLibraryService CreateService(IDictionary<string, string> config)
+    {
         ICredential credential;
 
         if (config.TryGetValue(GooglePhotosConnectorConfig.CredentialsJson, out var json) && !string.IsNullOrWhiteSpace(json))
@@ -95,13 +118,11 @@ public sealed class GooglePhotosSourceTask : SourceTask
             credential = new UserCredential(_authFlow, "user", new TokenResponse { RefreshToken = refreshToken });
         }
 
-        _service = new PhotosLibraryService(new BaseClientService.Initializer
+        return new PhotosLibraryService(new BaseClientService.Initializer
         {
             HttpClientInitializer = credential,
             ApplicationName = "Surgewave Google Photos Connector"
         });
-
-        _httpClient = new HttpClient();
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
@@ -227,7 +248,7 @@ public sealed class GooglePhotosSourceTask : SourceTask
         return items;
     }
 
-    private Filters? BuildDateFilters()
+    internal Filters? BuildDateFilters()
     {
         if (_dateRangeStart == null && _dateRangeEnd == null)
         {
@@ -276,7 +297,7 @@ public sealed class GooglePhotosSourceTask : SourceTask
             name.Equals(a.Title, StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task<SourceRecord> CreateRecordAsync(MediaItem item, CancellationToken cancellationToken)
+    internal async Task<SourceRecord> CreateRecordAsync(MediaItem item, CancellationToken cancellationToken)
     {
         // Note: The Google Photos API filename property may vary by SDK version
         var filename = item.Description ?? item.Id; // Fallback if filename not available

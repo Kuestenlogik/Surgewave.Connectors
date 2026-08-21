@@ -17,6 +17,18 @@ public sealed class HueSinkTask : SinkTask
     private string? _defaultLightId;
     private string? _defaultGroupId;
     private int _transitionTimeMs;
+    [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Test seam only: the caller owns and disposes the injected HttpClient")]
+    private readonly HttpClient? _httpClient;
+
+    public HueSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: talks to the bridge through a caller-supplied HttpClient, which the caller
+    /// also owns and disposes.
+    /// </summary>
+    internal HueSinkTask(HttpClient httpClient) => _httpClient = httpClient;
 
     public override string Version => "1.0.0";
 
@@ -29,7 +41,7 @@ public sealed class HueSinkTask : SinkTask
         _transitionTimeMs = int.Parse(config.TryGetValue(HueConnectorConfig.TransitionTimeMs, out var transitionTimeMs)
             ? transitionTimeMs : HueConnectorConfig.DefaultTransitionTimeMs.ToString());
 
-        _client = new LocalHueClient(bridgeIp);
+        _client = _httpClient != null ? new LocalHueClient(bridgeIp, _httpClient) : new LocalHueClient(bridgeIp);
         _client.Initialize(appKey);
     }
 

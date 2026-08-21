@@ -36,7 +36,7 @@ public sealed class RedisListSourceTask : SourceTask
         _blockingTimeoutMs = config.TryGetValue(RedisListConnectorConfig.BlockingTimeoutMs, out var bt) ? int.Parse(bt) : RedisListConnectorConfig.DefaultBlockingTimeoutMs;
         _batchSize = config.TryGetValue(RedisListConnectorConfig.BatchSize, out var bs) ? int.Parse(bs) : RedisListConnectorConfig.DefaultBatchSize;
 
-        _processingKey = $"{_key}:processing";
+        _processingKey = ProcessingKeyFor(_key);
 
         _redis = ConnectionMultiplexer.Connect(connectionString);
         _db = _redis.GetDatabase();
@@ -44,14 +44,23 @@ public sealed class RedisListSourceTask : SourceTask
         RecoverInFlightItems();
     }
 
-    private ListSide ConsumeSide()
-        => _popDirection.Equals("right", StringComparison.OrdinalIgnoreCase) ? ListSide.Right : ListSide.Left;
+    /// <summary>
+    /// Name of the list that holds items read from <paramref name="key"/> until the broker
+    /// has committed them.
+    /// </summary>
+    internal static string ProcessingKeyFor(string key) => $"{key}:processing";
+
+    /// <summary>
+    /// Maps the configured pop direction to the list side items are consumed from.
+    /// </summary>
+    internal static ListSide ConsumeSide(string popDirection)
+        => popDirection.Equals("right", StringComparison.OrdinalIgnoreCase) ? ListSide.Right : ListSide.Left;
 
     private void RecoverInFlightItems()
     {
         // Items left in the processing list belong to a previous run that stopped between
         // reading and committing - move them back so they are delivered again.
-        var refillSide = ConsumeSide() == ListSide.Left ? ListSide.Right : ListSide.Left;
+        var refillSide = ConsumeSide(_popDirection) == ListSide.Left ? ListSide.Right : ListSide.Left;
         while (!_db!.ListMove(_processingKey, _key, ListSide.Left, refillSide).IsNull)
         {
         }
@@ -67,7 +76,7 @@ public sealed class RedisListSourceTask : SourceTask
             {
                 // LMOVE to a processing list instead of a destructive pop; the item is
                 // removed from there only after the record is committed to the broker
-                var value = await _db!.ListMoveAsync(_key, _processingKey, ConsumeSide(), ListSide.Right);
+                var value = await _db!.ListMoveAsync(_key, _processingKey, ConsumeSide(_popDirection), ListSide.Right);
 
                 if (value.IsNull)
                 {

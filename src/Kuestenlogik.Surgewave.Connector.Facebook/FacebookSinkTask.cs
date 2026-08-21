@@ -17,6 +17,7 @@ public sealed class FacebookSinkTask : SinkTask
         WriteIndented = false
     };
 
+    private readonly HttpMessageHandler? _handler;
     private HttpClient? _httpClient;
     private string _pageId = string.Empty;
     private string _accessToken = string.Empty;
@@ -30,6 +31,15 @@ public sealed class FacebookSinkTask : SinkTask
     private const string PostTypeVideo = "video";
 
     public override string Version => "1.0.0";
+
+    public FacebookSinkTask()
+    {
+    }
+
+    /// <summary>
+    /// Builds the Graph API client on a caller-supplied transport instead of a socket of its own.
+    /// </summary>
+    internal FacebookSinkTask(HttpMessageHandler handler) => _handler = handler;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -51,10 +61,8 @@ public sealed class FacebookSinkTask : SinkTask
                 nameof(config));
         }
 
-        _httpClient = new HttpClient
-        {
-            BaseAddress = new Uri($"{FacebookConnectorConfig.BaseUrl}/{apiVersion}/")
-        };
+        _httpClient = _handler == null ? new HttpClient() : new HttpClient(_handler, disposeHandler: false);
+        _httpClient.BaseAddress = new Uri($"{FacebookConnectorConfig.BaseUrl}/{apiVersion}/");
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)

@@ -7,6 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Xmpp.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="XmppDotNet" />
     <PackageReference Include="XmppDotNet.Transport.Socket" />
     <PackageReference Include="XmppDotNet.Srv" />

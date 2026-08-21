@@ -20,9 +20,7 @@ public sealed class NanomsgSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
-        _topic = config[NanomsgConnectorConfig.Topic];
-        _socketType = (config.TryGetValue(NanomsgConnectorConfig.SocketType, out var socketType)
-            ? socketType : NanomsgConnectorConfig.DefaultSocketType).ToUpperInvariant();
+        Configure(config);
 
         var endpoints = config[NanomsgConnectorConfig.Endpoints]
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -31,8 +29,6 @@ public sealed class NanomsgSourceTask : SourceTask
             ? rcvBufSizeVal : NanomsgConnectorConfig.DefaultReceiveBufferSize.ToString());
         var reconnectMs = int.Parse(config.TryGetValue(NanomsgConnectorConfig.ReconnectIntervalMs, out var reconnectMsVal)
             ? reconnectMsVal : NanomsgConnectorConfig.DefaultReconnectIntervalMs.ToString());
-        _receiveTimeoutMs = int.Parse(config.TryGetValue(NanomsgConnectorConfig.ReceiveTimeoutMs, out var receiveTimeoutMs)
-            ? receiveTimeoutMs : NanomsgConnectorConfig.DefaultReceiveTimeoutMs.ToString());
 
         // Create appropriate socket type
         _socket = _socketType switch
@@ -113,7 +109,20 @@ public sealed class NanomsgSourceTask : SourceTask
         return Task.FromResult<IReadOnlyList<SourceRecord>>(records);
     }
 
-    private SourceRecord CreateRecord(byte[] data)
+    /// <summary>
+    /// Reads the record-shaping configuration. Split out of <see cref="Start"/> so the mapping
+    /// from a received frame to a <see cref="SourceRecord"/> can be exercised without a live socket.
+    /// </summary>
+    internal void Configure(IDictionary<string, string> config)
+    {
+        _topic = config[NanomsgConnectorConfig.Topic];
+        _socketType = (config.TryGetValue(NanomsgConnectorConfig.SocketType, out var socketType)
+            ? socketType : NanomsgConnectorConfig.DefaultSocketType).ToUpperInvariant();
+        _receiveTimeoutMs = int.Parse(config.TryGetValue(NanomsgConnectorConfig.ReceiveTimeoutMs, out var receiveTimeoutMs)
+            ? receiveTimeoutMs : NanomsgConnectorConfig.DefaultReceiveTimeoutMs.ToString());
+    }
+
+    internal SourceRecord CreateRecord(byte[] data)
     {
         var msgId = Interlocked.Increment(ref _messageId);
 

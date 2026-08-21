@@ -244,7 +244,7 @@ public sealed class HanaSinkTask : SinkTask
         }
     }
 
-    private string BuildMergeCommand(string tableName, List<string> columns, string columnList, string paramList)
+    internal string BuildMergeCommand(string tableName, List<string> columns, string columnList, string paramList)
     {
         if (_keyColumns == null || _keyColumns.Length == 0)
         {

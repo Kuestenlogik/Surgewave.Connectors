@@ -20,10 +20,16 @@ public sealed class SpannerSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
-        var projectId = config[SpannerConnectorConfig.ProjectId];
-        var instanceId = config[SpannerConnectorConfig.InstanceId];
-        var databaseId = config[SpannerConnectorConfig.DatabaseId];
+        ApplyConfig(config);
+        _connection = CreateConnection(config);
+    }
 
+    /// <summary>
+    /// Reads the task settings. Separated from connection construction so that record
+    /// conversion stays reachable without a Spanner connection.
+    /// </summary>
+    internal void ApplyConfig(IDictionary<string, string> config)
+    {
         _targetTable = config[SpannerConnectorConfig.TargetTable];
         _writeMode = config.GetValueOrDefault(SpannerConnectorConfig.WriteMode,
             SpannerConnectorConfig.DefaultWriteMode)!.ToLowerInvariant();
@@ -37,8 +43,14 @@ public sealed class SpannerSinkTask : SinkTask
         {
             _keyColumns = keyColumnsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
+    }
 
-        // Build connection string
+    private static SpannerConnection CreateConnection(IDictionary<string, string> config)
+    {
+        var projectId = config[SpannerConnectorConfig.ProjectId];
+        var instanceId = config[SpannerConnectorConfig.InstanceId];
+        var databaseId = config[SpannerConnectorConfig.DatabaseId];
+
         var connectionStringBuilder = new SpannerConnectionStringBuilder
         {
             DataSource = $"projects/{projectId}/instances/{instanceId}/databases/{databaseId}"
@@ -67,7 +79,7 @@ public sealed class SpannerSinkTask : SinkTask
             }
         }
 
-        _connection = new SpannerConnection(connectionStringBuilder);
+        return new SpannerConnection(connectionStringBuilder);
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
@@ -118,7 +130,7 @@ public sealed class SpannerSinkTask : SinkTask
         }
     }
 
-    private object? ConvertJsonValue(JsonElement element)
+    internal static object? ConvertJsonValue(JsonElement element)
     {
         return element.ValueKind switch
         {

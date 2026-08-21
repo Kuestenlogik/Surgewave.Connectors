@@ -88,6 +88,15 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
             _targetPartitionCounts[targetTopic] = partitionCount;
         }
 
+        return SelectPartition(record, partitionCount);
+    }
+
+    /// <summary>
+    /// Spreads a record over the target topic's partitions: keyed records stick to the
+    /// partition their key hashes to, unkeyed ones go round-robin.
+    /// </summary>
+    internal int SelectPartition(SinkRecord record, int partitionCount)
+    {
         if (partitionCount == 1)
             return 0;
 
@@ -135,7 +144,7 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
         _firstBatchedAtUtc = DateTime.MinValue;
     }
 
-    private string GetTargetTopic(string sourceTopic)
+    internal string GetTargetTopic(string sourceTopic)
     {
         if (!string.IsNullOrEmpty(_topicOverride))
         {

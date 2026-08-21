@@ -28,9 +28,26 @@ public sealed class FlinkRestClient : IDisposable
 
     public FlinkRestClient(string baseUrl, int timeoutMs = 30000, string? authType = null,
         string? username = null, string? password = null, string? token = null)
+        : this(new HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) },
+            baseUrl, authType, username, password, token)
+    {
+    }
+
+    /// <summary>
+    /// Talks to Flink over a caller-supplied transport instead of a socket of its own.
+    /// </summary>
+    internal FlinkRestClient(HttpMessageHandler handler, string baseUrl, int timeoutMs = 30000,
+        string? authType = null, string? username = null, string? password = null, string? token = null)
+        : this(new HttpClient(handler, disposeHandler: false) { Timeout = TimeSpan.FromMilliseconds(timeoutMs) },
+            baseUrl, authType, username, password, token)
+    {
+    }
+
+    private FlinkRestClient(HttpClient httpClient, string baseUrl, string? authType,
+        string? username, string? password, string? token)
     {
         _baseUrl = baseUrl.TrimEnd('/');
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+        _httpClient = httpClient;
 
         // Configure authentication
         switch (authType?.ToLowerInvariant())

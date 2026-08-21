@@ -37,7 +37,22 @@ public sealed class EfsSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
-        var region = GetConfigValue(config, EfsConnectorConfig.RegionConfig, EfsConnectorConfig.DefaultRegion);
+        ReadConfig(config);
+        _efsClient = CreateClient(config);
+    }
+
+    /// <summary>
+    /// Starts the task against an already-built EFS client instead of building one from the
+    /// configuration. Test seam for driving the operation handling without calling AWS.
+    /// </summary>
+    internal void StartWith(IDictionary<string, string> config, AmazonElasticFileSystemClient client)
+    {
+        ReadConfig(config);
+        _efsClient = client;
+    }
+
+    private void ReadConfig(IDictionary<string, string> config)
+    {
         _operationField = GetConfigValue(config, EfsConnectorConfig.OperationFieldConfig, EfsConnectorConfig.DefaultOperationField);
         _fileSystemIdField = GetConfigValue(config, EfsConnectorConfig.FileSystemIdFieldConfig, EfsConnectorConfig.DefaultFileSystemIdField);
         _nameField = GetConfigValue(config, EfsConnectorConfig.NameFieldConfig, EfsConnectorConfig.DefaultNameField);
@@ -59,6 +74,11 @@ public sealed class EfsSinkTask : SinkTask
                 }
             }
         }
+    }
+
+    private static AmazonElasticFileSystemClient CreateClient(IDictionary<string, string> config)
+    {
+        var region = GetConfigValue(config, EfsConnectorConfig.RegionConfig, EfsConnectorConfig.DefaultRegion);
 
         var clientConfig = new AmazonElasticFileSystemConfig
         {
@@ -77,12 +97,10 @@ public sealed class EfsSinkTask : SinkTask
         if (!string.IsNullOrEmpty(accessKey) && !string.IsNullOrEmpty(secretKey))
         {
             var credentials = new BasicAWSCredentials(accessKey, secretKey);
-            _efsClient = new AmazonElasticFileSystemClient(credentials, clientConfig);
+            return new AmazonElasticFileSystemClient(credentials, clientConfig);
         }
-        else
-        {
-            _efsClient = new AmazonElasticFileSystemClient(clientConfig);
-        }
+
+        return new AmazonElasticFileSystemClient(clientConfig);
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
@@ -334,14 +352,16 @@ public sealed class EfsSinkTask : SinkTask
         await _efsClient!.DeleteMountTargetAsync(request, cancellationToken);
     }
 
-    private static string GetStringValue(Dictionary<string, JsonElement> data, string key, string defaultValue)
+    /// <summary>Reads a string field from the record payload. Internal for record-parsing tests.</summary>
+    internal static string GetStringValue(Dictionary<string, JsonElement> data, string key, string defaultValue)
     {
         if (data.TryGetValue(key, out var el) && el.ValueKind == JsonValueKind.String)
             return el.GetString() ?? defaultValue;
         return defaultValue;
     }
 
-    private static bool GetBoolValue(Dictionary<string, JsonElement> data, string key, bool defaultValue)
+    /// <summary>Reads a boolean field from the record payload. Internal for record-parsing tests.</summary>
+    internal static bool GetBoolValue(Dictionary<string, JsonElement> data, string key, bool defaultValue)
     {
         if (data.TryGetValue(key, out var el))
         {
@@ -362,7 +382,8 @@ public sealed class EfsSinkTask : SinkTask
         return defaultValue;
     }
 
-    private static long GetLongValue(Dictionary<string, JsonElement> data, string key, long defaultValue)
+    /// <summary>Reads a 64-bit integer field from the record payload. Internal for record-parsing tests.</summary>
+    internal static long GetLongValue(Dictionary<string, JsonElement> data, string key, long defaultValue)
     {
         if (data.TryGetValue(key, out var el))
         {

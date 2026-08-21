@@ -28,6 +28,24 @@ public sealed class BeanstalkdSourceTask : SourceTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        ReadConfig(config);
+
+        _cts = new CancellationTokenSource();
+        ConnectAsync().GetAwaiter().GetResult();
+    }
+
+    /// <summary>
+    /// Applies the configuration and attaches an already-connected client, skipping the TCP
+    /// connect/watch handshake. Test seam for driving polling without a beanstalkd server.
+    /// </summary>
+    internal void StartWith(IDictionary<string, string> config, BeanstalkClient client)
+    {
+        ReadConfig(config);
+        _client = client;
+    }
+
+    private void ReadConfig(IDictionary<string, string> config)
+    {
         _host = config.TryGetValue(BeanstalkdConnectorConfig.Host, out var host)
             ? host : BeanstalkdConnectorConfig.DefaultHost;
         _port = config.TryGetValue(BeanstalkdConnectorConfig.Port, out var port)
@@ -48,9 +66,6 @@ public sealed class BeanstalkdSourceTask : SourceTask
         _sourcePartition["host"] = _host;
         _sourcePartition["port"] = _port;
         _sourcePartition["tube"] = _tube;
-
-        _cts = new CancellationTokenSource();
-        ConnectAsync().GetAwaiter().GetResult();
     }
 
     private async Task ConnectAsync()

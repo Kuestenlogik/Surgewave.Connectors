@@ -28,10 +28,23 @@ public sealed class SparkRestClient : IDisposable
 
     public SparkRestClient(string? sparkUrl, string? livyUrl, int timeoutMs = 60000,
         string? authType = null, string? username = null, string? password = null)
+        : this(sparkUrl, livyUrl, timeoutMs, authType, username, password, transport: null)
+    {
+    }
+
+    /// <summary>
+    /// Test seam: run the client against the given transport instead of a live cluster.
+    /// The caller keeps ownership of the handler.
+    /// </summary>
+    internal SparkRestClient(string? sparkUrl, string? livyUrl, int timeoutMs,
+        string? authType, string? username, string? password, HttpMessageHandler? transport)
     {
         _sparkUrl = sparkUrl?.TrimEnd('/') ?? "";
         _livyUrl = livyUrl?.TrimEnd('/');
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromMilliseconds(timeoutMs) };
+        _httpClient = transport is null
+            ? new HttpClient()
+            : new HttpClient(transport, disposeHandler: false);
+        _httpClient.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
 
         if (authType?.Equals("basic", StringComparison.OrdinalIgnoreCase) == true && !string.IsNullOrEmpty(username))
         {

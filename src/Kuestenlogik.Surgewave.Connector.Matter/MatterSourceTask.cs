@@ -19,6 +19,8 @@ namespace Kuestenlogik.Surgewave.Connector.Matter;
 [SuppressMessage("Usage", "CA2234:Pass System.Uri objects instead of strings", Justification = "URL strings are simpler for REST API calls")]
 public sealed class MatterSourceTask : SourceTask
 {
+    [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "The injected transport is owned by the caller")]
+    private readonly HttpMessageHandler? _transport;
     private HttpClient? _httpClient;
     private string _controllerUrl = null!;
     private string _topic = null!;
@@ -33,6 +35,16 @@ public sealed class MatterSourceTask : SourceTask
     private DateTime _lastPoll = DateTime.MinValue;
     private Dictionary<string, string> _lastStates = new();
     private long _messageId;
+
+    public MatterSourceTask()
+    {
+    }
+
+    /// <summary>
+    /// Test seam: routes the controller calls through <paramref name="transport"/> instead of the
+    /// network. The handler stays owned by the caller.
+    /// </summary>
+    internal MatterSourceTask(HttpMessageHandler transport) => _transport = transport;
 
     public override string Version => "1.0.0";
 
@@ -56,7 +68,9 @@ public sealed class MatterSourceTask : SourceTask
                 .ToHashSet();
         }
 
-        _httpClient = new HttpClient();
+        _httpClient = _transport is null
+            ? new HttpClient()
+            : new HttpClient(_transport, disposeHandler: false);
         _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         var apiKey = config.TryGetValue(MatterConnectorConfig.ApiKey, out var apiKeyVal) ? apiKeyVal : null;

@@ -25,11 +25,20 @@ public sealed class AmqpSinkTask : SinkTask
         StartAsync(config).GetAwaiter().GetResult();
     }
 
-    private async Task StartAsync(IDictionary<string, string> config)
+    /// <summary>
+    /// Reads the exchange/routing-key/persistence settings from the connector configuration.
+    /// Split out of the async start-up so the record mapping can be exercised without a broker.
+    /// </summary>
+    internal void ReadConfig(IDictionary<string, string> config)
     {
         _exchange = config.GetValueOrDefault(AmqpConnectorConfig.TargetExchange, "")!;
         _routingKey = config.GetValueOrDefault(AmqpConnectorConfig.TargetRoutingKey, "")!;
         _persistent = config.GetValueOrDefault(AmqpConnectorConfig.Persistent, "true") == "true";
+    }
+
+    private async Task StartAsync(IDictionary<string, string> config)
+    {
+        ReadConfig(config);
 
         var factory = CreateConnectionFactory(config);
         _connection = await factory.CreateConnectionAsync();
@@ -49,7 +58,11 @@ public sealed class AmqpSinkTask : SinkTask
         }
     }
 
-    private ConnectionFactory CreateConnectionFactory(IDictionary<string, string> config)
+    /// <summary>
+    /// Builds the RabbitMQ connection factory from the connector configuration.
+    /// Internal so the URI/host/SSL/heartbeat mapping can be verified without a broker.
+    /// </summary>
+    internal static ConnectionFactory CreateConnectionFactory(IDictionary<string, string> config)
     {
         var uri = config.GetValueOrDefault(AmqpConnectorConfig.Uri, "");
 
@@ -93,60 +106,71 @@ public sealed class AmqpSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
-            // Determine routing key from record or config
-            var routingKey = _routingKey;
-            if (record.Headers?.TryGetValue("amqp.routing_key", out var rkBytes) == true)
-            {
-                routingKey = Encoding.UTF8.GetString(rkBytes);
-            }
-            else if (record.Key != null)
-            {
-                routingKey = Encoding.UTF8.GetString(record.Key);
-            }
-
-            // Build properties
-            var properties = new BasicProperties
-            {
-                Persistent = _persistent,
-                Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
-            };
-
-            // Copy headers from record
-            if (record.Headers != null)
-            {
-                var amqpHeaders = new Dictionary<string, object?>();
-                foreach (var (key, value) in record.Headers)
-                {
-                    if (key.StartsWith("amqp.header.", StringComparison.Ordinal))
-                    {
-                        amqpHeaders[key[12..]] = value;
-                    }
-                }
-                if (amqpHeaders.Count > 0)
-                {
-                    properties.Headers = amqpHeaders;
-                }
-
-                // Restore content type if present
-                if (record.Headers.TryGetValue("amqp.content_type", out var ctBytes))
-                {
-                    properties.ContentType = Encoding.UTF8.GetString(ctBytes);
-                }
-                if (record.Headers.TryGetValue("amqp.correlation_id", out var corrBytes))
-                {
-                    properties.CorrelationId = Encoding.UTF8.GetString(corrBytes);
-                }
-                if (record.Headers.TryGetValue("amqp.message_id", out var midBytes))
-                {
-                    properties.MessageId = Encoding.UTF8.GetString(midBytes);
-                }
-            }
+            var (routingKey, properties) = BuildPublication(record);
 
             // With publisher confirmations enabled, awaiting BasicPublishAsync waits for
             // the broker confirm. A publish failure must propagate so the worker
             // retries/DLQs instead of committing offsets for lost messages.
             await _channel!.BasicPublishAsync(_exchange, routingKey, false, properties, record.Value, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Resolves the routing key and the AMQP properties for a sink record. Internal so the
+    /// routing-key precedence and the header mapping are testable without a broker.
+    /// </summary>
+    internal (string RoutingKey, BasicProperties Properties) BuildPublication(SinkRecord record)
+    {
+        // Determine routing key from record or config
+        var routingKey = _routingKey;
+        if (record.Headers?.TryGetValue("amqp.routing_key", out var rkBytes) == true)
+        {
+            routingKey = Encoding.UTF8.GetString(rkBytes);
+        }
+        else if (record.Key != null)
+        {
+            routingKey = Encoding.UTF8.GetString(record.Key);
+        }
+
+        // Build properties
+        var properties = new BasicProperties
+        {
+            Persistent = _persistent,
+            Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+        };
+
+        // Copy headers from record
+        if (record.Headers != null)
+        {
+            var amqpHeaders = new Dictionary<string, object?>();
+            foreach (var (key, value) in record.Headers)
+            {
+                if (key.StartsWith("amqp.header.", StringComparison.Ordinal))
+                {
+                    amqpHeaders[key[12..]] = value;
+                }
+            }
+            if (amqpHeaders.Count > 0)
+            {
+                properties.Headers = amqpHeaders;
+            }
+
+            // Restore content type if present
+            if (record.Headers.TryGetValue("amqp.content_type", out var ctBytes))
+            {
+                properties.ContentType = Encoding.UTF8.GetString(ctBytes);
+            }
+            if (record.Headers.TryGetValue("amqp.correlation_id", out var corrBytes))
+            {
+                properties.CorrelationId = Encoding.UTF8.GetString(corrBytes);
+            }
+            if (record.Headers.TryGetValue("amqp.message_id", out var midBytes))
+            {
+                properties.MessageId = Encoding.UTF8.GetString(midBytes);
+            }
+        }
+
+        return (routingKey, properties);
     }
 
     public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
