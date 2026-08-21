@@ -100,17 +100,19 @@ public sealed class TimescaleSinkTask : SinkTask
                 {
                     batch.Add(row);
                 }
-
-                // Flush batch if full
-                if (batch.Count >= _batchSize)
-                {
-                    await FlushBatchAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Malformed record: surface and skip. Write failures below must throw.
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
+
+            // Flush batch if full
+            if (batch.Count >= _batchSize)
+            {
+                await FlushBatchAsync(batch, cancellationToken);
+                batch.Clear();
             }
         }
 
@@ -160,30 +162,24 @@ public sealed class TimescaleSinkTask : SinkTask
     {
         if (batch.Count == 0) return;
 
-        try
+        // Write failures must propagate so the worker retries and never commits undelivered offsets.
+        await using var conn = await _dataSource!.OpenConnectionAsync(ct);
+
+        // Detect schema on first batch
+        if (!_schemaDetected)
         {
-            await using var conn = await _dataSource!.OpenConnectionAsync(ct);
-
-            // Detect schema on first batch
-            if (!_schemaDetected)
-            {
-                await DetectSchemaAsync(conn, batch[0].Keys, ct);
-                _schemaDetected = true;
-            }
-
-            // Use COPY for high-performance bulk insert
-            if (_insertMode == "insert")
-            {
-                await BulkCopyAsync(conn, batch, ct);
-            }
-            else
-            {
-                await UpsertAsync(conn, batch, ct);
-            }
+            await DetectSchemaAsync(conn, batch[0].Keys, ct);
+            _schemaDetected = true;
         }
-        catch (Exception)
+
+        // Use COPY for high-performance bulk insert
+        if (_insertMode == "insert")
         {
-            // Log and continue
+            await BulkCopyAsync(conn, batch, ct);
+        }
+        else
+        {
+            await UpsertAsync(conn, batch, ct);
         }
     }
 

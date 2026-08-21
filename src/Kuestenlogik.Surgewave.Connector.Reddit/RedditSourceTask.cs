@@ -17,11 +17,19 @@ public class RedditSourceTask : SourceTask
         WriteIndented = false
     };
 
+    private static readonly TimeSpan TokenRefreshMargin = TimeSpan.FromMinutes(1);
+
     private IDictionary<string, string> _config = new Dictionary<string, string>();
     private string _topic = string.Empty;
 
     // Reddit client
     private RedditClient? _redditClient;
+    private string _clientId = string.Empty;
+    private string? _clientSecret;
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _userAgent = string.Empty;
+    private DateTimeOffset _tokenExpiresAt = DateTimeOffset.MinValue;
 
     // Settings
     private List<string> _subreddits = [];
@@ -49,9 +57,11 @@ public class RedditSourceTask : SourceTask
         _config = config;
         _topic = config[RedditConnectorConfig.TopicConfig];
 
-        var clientId = config[RedditConnectorConfig.ClientIdConfig];
-        var clientSecret = config.GetValueOrDefault(RedditConnectorConfig.ClientSecretConfig);
-        var userAgent = config.GetValueOrDefault(RedditConnectorConfig.UserAgentConfig);
+        _clientId = config[RedditConnectorConfig.ClientIdConfig];
+        _clientSecret = config.GetValueOrDefault(RedditConnectorConfig.ClientSecretConfig);
+        _username = config[RedditConnectorConfig.UsernameConfig];
+        _password = config[RedditConnectorConfig.PasswordConfig];
+        _userAgent = config[RedditConnectorConfig.UserAgentConfig];
 
         // Parse subreddits
         if (config.TryGetValue(RedditConnectorConfig.SubredditsConfig, out var subredditsStr) &&
@@ -132,12 +142,27 @@ public class RedditSourceTask : SourceTask
             _seenCommentIds[sub] = [];
         }
 
-        // Initialize Reddit client - Reddit.NET uses refresh token for authentication
-        // For read-only operations, we can use just the app ID
+        // The client is created lazily in PollAsync once an access token has been
+        // obtained via the password grant; Reddit.NET does not fetch tokens itself.
+        _redditClient = null;
+        _tokenExpiresAt = DateTimeOffset.MinValue;
+    }
+
+    private async Task<RedditClient> EnsureAuthenticatedAsync(CancellationToken cancellationToken)
+    {
+        if (_redditClient != null && DateTimeOffset.UtcNow < _tokenExpiresAt - TokenRefreshMargin)
+            return _redditClient;
+
+        var (accessToken, expiresAt) = await RedditAuthenticator.FetchAccessTokenAsync(
+            _clientId, _clientSecret, _username, _password, _userAgent, cancellationToken);
+
         _redditClient = new RedditClient(
-            appId: clientId,
-            appSecret: clientSecret
-        );
+            appId: _clientId,
+            appSecret: _clientSecret,
+            accessToken: accessToken,
+            userAgent: _userAgent);
+        _tokenExpiresAt = expiresAt;
+        return _redditClient;
     }
 
     public override void Stop()
@@ -158,7 +183,7 @@ public class RedditSourceTask : SourceTask
     {
         var records = new List<SourceRecord>();
 
-        if (_redditClient == null || _subreddits.Count == 0)
+        if (_subreddits.Count == 0)
             return records;
 
         // Respect poll interval
@@ -171,11 +196,13 @@ public class RedditSourceTask : SourceTask
 
         _lastPollTime = DateTime.UtcNow;
 
+        var reddit = await EnsureAuthenticatedAsync(cancellationToken);
+
         foreach (var subredditName in _subreddits)
         {
             try
             {
-                var subreddit = _redditClient.Subreddit(subredditName).About();
+                var subreddit = reddit.Subreddit(subredditName).About();
 
                 // Fetch posts if needed
                 if (_contentType is RedditConnectorConfig.ContentTypePosts or RedditConnectorConfig.ContentTypeBoth)
@@ -235,10 +262,14 @@ public class RedditSourceTask : SourceTask
                     _seenCommentIds[subredditName] = _seenCommentIds[subredditName].TakeLast(5000).ToHashSet();
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                // Log error but continue with other subreddits
-                Console.Error.WriteLine($"Error polling subreddit {subredditName}: {ex.Message}");
+                // Surface the failure to the framework, then continue with other subreddits
+                Context?.RaiseError?.Invoke(ex);
             }
         }
 

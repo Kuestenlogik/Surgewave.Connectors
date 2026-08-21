@@ -10,9 +10,11 @@ internal sealed class BeanstalkClient : IDisposable
 {
     private readonly string _host;
     private readonly int _port;
+    private readonly byte[] _readBuffer = new byte[8192];
+    private int _readBufferPos;
+    private int _readBufferLen;
     private TcpClient? _tcpClient;
     private NetworkStream? _stream;
-    private StreamReader? _reader;
     private StreamWriter? _writer;
 
     public BeanstalkClient(string host, int port)
@@ -26,8 +28,10 @@ internal sealed class BeanstalkClient : IDisposable
         _tcpClient = new TcpClient();
         await _tcpClient.ConnectAsync(_host, _port);
         _stream = _tcpClient.GetStream();
-        _reader = new StreamReader(_stream, Encoding.ASCII);
-        _writer = new StreamWriter(_stream, Encoding.ASCII) { AutoFlush = true };
+        // The beanstalkd protocol requires \r\n line termination regardless of platform.
+        _writer = new StreamWriter(_stream, Encoding.ASCII) { AutoFlush = true, NewLine = "\r\n" };
+        _readBufferPos = 0;
+        _readBufferLen = 0;
     }
 
     public async Task UseAsync(string tube)
@@ -92,16 +96,10 @@ internal sealed class BeanstalkClient : IDisposable
             var bytes = int.Parse(parts[2]);
 
             var data = new byte[bytes];
-            var offset = 0;
-            while (offset < bytes)
-            {
-                var read = await _stream!.ReadAsync(data.AsMemory(offset, bytes - offset));
-                if (read == 0) break;
-                offset += read;
-            }
+            await ReadExactAsync(data);
 
-            // Read trailing \r\n
-            await _reader!.ReadLineAsync();
+            // Consume the trailing \r\n after the job body
+            await ReadLineAsync();
 
             return new BeanstalkJob(id, data);
         }
@@ -126,12 +124,55 @@ internal sealed class BeanstalkClient : IDisposable
 
     private async Task<string> ReadLineAsync()
     {
-        return await _reader!.ReadLineAsync() ?? string.Empty;
+        var line = new StringBuilder();
+        while (true)
+        {
+            var b = await ReadByteAsync();
+            if (b < 0 || b == '\n')
+                break;
+            line.Append((char)b);
+        }
+        if (line.Length > 0 && line[^1] == '\r')
+            line.Length--;
+        return line.ToString();
+    }
+
+    private async Task<int> ReadByteAsync()
+    {
+        if (_readBufferPos >= _readBufferLen)
+        {
+            _readBufferLen = await _stream!.ReadAsync(_readBuffer.AsMemory());
+            _readBufferPos = 0;
+            if (_readBufferLen == 0)
+                return -1;
+        }
+        return _readBuffer[_readBufferPos++];
+    }
+
+    private async Task ReadExactAsync(byte[] data)
+    {
+        var offset = 0;
+        while (offset < data.Length)
+        {
+            var buffered = _readBufferLen - _readBufferPos;
+            if (buffered > 0)
+            {
+                var take = Math.Min(buffered, data.Length - offset);
+                Array.Copy(_readBuffer, _readBufferPos, data, offset, take);
+                _readBufferPos += take;
+                offset += take;
+                continue;
+            }
+
+            var read = await _stream!.ReadAsync(data.AsMemory(offset));
+            if (read == 0)
+                throw new InvalidOperationException("Connection closed while reading job data");
+            offset += read;
+        }
     }
 
     public void Dispose()
     {
-        _reader?.Dispose();
         _writer?.Dispose();
         _stream?.Dispose();
         _tcpClient?.Dispose();

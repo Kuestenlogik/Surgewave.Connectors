@@ -5,8 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>preview</LangVersion>
-    <!-- CS0169/CS8620: OData client library nullability quirks -->
-    <NoWarn>$(NoWarn);CS0169;CS8620</NoWarn>
+    <!-- CS8620: OData client library nullability quirks -->
+    <NoWarn>$(NoWarn);CS8620</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

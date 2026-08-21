@@ -22,6 +22,7 @@ public sealed class TigerBeetleSourceTask : SourceTask
     private DateTime _lastPoll = DateTime.MinValue;
     private long _messageId;
     private readonly Dictionary<UInt128, AccountState> _accountStates = new();
+    private readonly Dictionary<UInt128, ulong> _transferCursors = new();
 
     public override string Version => "1.0.0";
 
@@ -113,9 +114,10 @@ public sealed class TigerBeetleSourceTask : SourceTask
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the error; the records read so far are still returned
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -127,11 +129,13 @@ public sealed class TigerBeetleSourceTask : SourceTask
 
         try
         {
-            // Lookup account transfers
+            // Lookup account transfers created after the last one we emitted
+            _transferCursors.TryGetValue(accountId, out var lastTimestamp);
+
             var filter = new AccountFilter
             {
                 AccountId = accountId,
-                TimestampMin = 0,
+                TimestampMin = lastTimestamp + 1,
                 TimestampMax = 0,
                 Limit = (uint)_lookupBatchSize,
                 Flags = AccountFilterFlags.Credits | AccountFilterFlags.Debits
@@ -143,11 +147,19 @@ public sealed class TigerBeetleSourceTask : SourceTask
             {
                 var record = CreateTransferRecord(transfer);
                 records.Add(record);
+
+                if (transfer.Timestamp > lastTimestamp)
+                {
+                    lastTimestamp = transfer.Timestamp;
+                }
             }
+
+            _transferCursors[accountId] = lastTimestamp;
         }
-        catch
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the error; the cursor is untouched so the next poll retries
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;

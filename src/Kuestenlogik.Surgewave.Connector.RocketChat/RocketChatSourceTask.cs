@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -56,6 +57,29 @@ public sealed class RocketChatSourceTask : SourceTask
         };
         _httpClient.DefaultRequestHeaders.Add("X-Auth-Token", authToken);
         _httpClient.DefaultRequestHeaders.Add("X-User-Id", userId);
+
+        RestoreOffsets();
+    }
+
+    private void RestoreOffsets()
+    {
+        if (_roomIds == null)
+            return;
+
+        foreach (var roomId in _roomIds)
+        {
+            var stored = Context.OffsetStorageReader?.Offset(new Dictionary<string, object>
+            {
+                ["room_id"] = roomId
+            });
+
+            if (stored != null
+                && stored.TryGetValue("ts", out var ts)
+                && long.TryParse(ts?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var unixMs))
+            {
+                _lastMessageTimes[roomId] = DateTimeOffset.FromUnixTimeMilliseconds(unixMs);
+            }
+        }
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

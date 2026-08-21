@@ -109,16 +109,18 @@ public sealed class ODataSinkTask : SinkTask
                 {
                     batch.Add(entity);
                 }
-
-                if (batch.Count >= _batchSize)
-                {
-                    await FlushBatchAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
             {
-                // Log and continue
+                // A record whose value is not a JSON object can never become an
+                // entity, so retrying is pointless — surface it and keep going.
+                Context?.RaiseError?.Invoke(ex);
+            }
+
+            if (batch.Count >= _batchSize)
+            {
+                await FlushBatchAsync(batch, cancellationToken);
+                batch.Clear();
             }
         }
 
@@ -160,9 +162,12 @@ public sealed class ODataSinkTask : SinkTask
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Log and continue
+            // A failed write must propagate so the worker retries and dead-letters
+            // instead of committing offsets for records that were never written.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
     }
 

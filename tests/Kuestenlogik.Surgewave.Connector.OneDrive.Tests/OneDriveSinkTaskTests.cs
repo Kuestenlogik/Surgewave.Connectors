@@ -235,7 +235,11 @@ public sealed class OneDriveSinkTaskTests
             }
         };
 
-        await task.PutAsync(records, CancellationToken.None);
+        // a record without a filename is a poison record: it must throw so the
+        // worker's retry/DLQ path engages instead of the offset being committed
+        var ex = await Assert.ThrowsAsync<ArgumentException>(
+            () => task.PutAsync(records, CancellationToken.None));
+        Assert.Contains("filename", ex.Message, StringComparison.OrdinalIgnoreCase);
 
         Assert.NotNull(capturedError);
         Assert.Contains("filename", capturedError.Message, StringComparison.OrdinalIgnoreCase);

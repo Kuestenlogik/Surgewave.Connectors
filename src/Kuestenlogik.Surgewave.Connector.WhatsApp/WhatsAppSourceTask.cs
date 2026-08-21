@@ -26,10 +26,12 @@ public sealed class WhatsAppSourceTask : SourceTask
     private CancellationTokenSource? _cts;
     private Task? _listenerTask;
 
+    // Wait (not DropOldest): on backlog the webhook response is delayed until there is room,
+    // so Meta times out and redelivers instead of us acking messages we then drop.
     private readonly Channel<WhatsAppWebhookPayload> _messageChannel = Channel.CreateBounded<WhatsAppWebhookPayload>(
         new BoundedChannelOptions(1000)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false
         });
@@ -61,7 +63,7 @@ public sealed class WhatsAppSourceTask : SourceTask
             try
             {
                 var context = await _listener.GetContextAsync();
-                _ = HandleRequestAsync(context);
+                _ = HandleRequestAsync(context, ct);
             }
             catch (HttpListenerException) when (ct.IsCancellationRequested)
             {
@@ -74,7 +76,7 @@ public sealed class WhatsAppSourceTask : SourceTask
         }
     }
 
-    private async Task HandleRequestAsync(HttpListenerContext context)
+    private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken ct)
     {
         try
         {
@@ -104,7 +106,7 @@ public sealed class WhatsAppSourceTask : SourceTask
 
                 if (payload != null)
                 {
-                    await _messageChannel.Writer.WriteAsync(payload);
+                    await _messageChannel.Writer.WriteAsync(payload, ct);
                 }
 
                 context.Response.StatusCode = 200;
@@ -112,6 +114,21 @@ public sealed class WhatsAppSourceTask : SourceTask
             else
             {
                 context.Response.StatusCode = 405;
+            }
+        }
+        catch (Exception ex)
+        {
+            Context?.RaiseError?.Invoke(ex);
+
+            // Without this the default 200 would ack a payload we failed to buffer;
+            // a 5xx makes Meta redeliver.
+            try
+            {
+                context.Response.StatusCode = 500;
+            }
+            catch (InvalidOperationException)
+            {
+                // Headers already sent; nothing more we can do for this request.
             }
         }
         finally

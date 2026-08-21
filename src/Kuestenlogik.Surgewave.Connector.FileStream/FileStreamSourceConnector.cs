@@ -71,9 +71,9 @@ public sealed class FileStreamSourceTask : SourceTask
 
     private string _filename = "";
     private string _topic = "";
-    private StreamReader? _reader;
     private System.IO.FileStream? _stream;
     private long _streamOffset;
+    private readonly MemoryStream _pending = new();
     private readonly Dictionary<string, object> _sourcePartition = new();
 
     public override void Start(IDictionary<string, string> config)
@@ -95,7 +95,6 @@ public sealed class FileStreamSourceTask : SourceTask
 
     public override void Stop()
     {
-        _reader?.Dispose();
         _stream?.Dispose();
     }
 
@@ -103,49 +102,47 @@ public sealed class FileStreamSourceTask : SourceTask
     {
         if (disposing)
         {
-            _reader?.Dispose();
             _stream?.Dispose();
+            _pending.Dispose();
         }
         base.Dispose(disposing);
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
     {
-        if (_reader == null || !File.Exists(_filename))
+        if (_stream == null)
+        {
+            // The file may be created after the task started - keep retrying
+            OpenFile();
+        }
+
+        if (_stream == null)
         {
             await Task.Delay(1000, cancellationToken);
             return [];
         }
 
         var records = new List<SourceRecord>();
-        var batchSize = 100;
-        var count = 0;
+        const int batchSize = 100;
+        var buffer = new byte[4096];
 
-        while (count < batchSize)
+        while (records.Count < batchSize)
         {
-            var line = await _reader.ReadLineAsync(cancellationToken);
-            if (line == null)
+            ExtractLines(records, batchSize);
+            if (records.Count >= batchSize)
+            {
+                break;
+            }
+
+            var read = await _stream.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (read == 0)
             {
                 // End of file, wait for more data
                 break;
             }
 
-            _streamOffset = _stream!.Position;
-
-            var sourceOffset = new Dictionary<string, object>
-            {
-                [PositionField] = _streamOffset
-            };
-
-            records.Add(new SourceRecord
-            {
-                SourcePartition = _sourcePartition,
-                SourceOffset = sourceOffset,
-                Topic = _topic,
-                Value = Encoding.UTF8.GetBytes(line)
-            });
-
-            count++;
+            _pending.Seek(0, SeekOrigin.End);
+            _pending.Write(buffer, 0, read);
         }
 
         if (records.Count == 0)
@@ -157,6 +154,50 @@ public sealed class FileStreamSourceTask : SourceTask
         return records;
     }
 
+    /// <summary>
+    /// Extracts complete lines from the pending byte buffer. The stored offset counts
+    /// consumed bytes (line plus terminator), never the file stream's read position:
+    /// buffered read-ahead would otherwise skip unconsumed lines on restart.
+    /// </summary>
+    private void ExtractLines(List<SourceRecord> records, int batchSize)
+    {
+        var data = _pending.GetBuffer();
+        var length = (int)_pending.Length;
+        var lineStart = 0;
+
+        for (var i = 0; i < length && records.Count < batchSize; i++)
+        {
+            if (data[i] != (byte)'\n')
+            {
+                continue;
+            }
+
+            var lineEnd = i > lineStart && data[i - 1] == (byte)'\r' ? i - 1 : i;
+            var line = Encoding.UTF8.GetString(data, lineStart, lineEnd - lineStart);
+
+            _streamOffset += i - lineStart + 1;
+            lineStart = i + 1;
+
+            records.Add(new SourceRecord
+            {
+                SourcePartition = _sourcePartition,
+                SourceOffset = new Dictionary<string, object>
+                {
+                    [PositionField] = _streamOffset
+                },
+                Topic = _topic,
+                Value = Encoding.UTF8.GetBytes(line)
+            });
+        }
+
+        if (lineStart > 0)
+        {
+            var remaining = length - lineStart;
+            Buffer.BlockCopy(data, lineStart, data, 0, remaining);
+            _pending.SetLength(remaining);
+        }
+    }
+
     private void OpenFile()
     {
         if (File.Exists(_filename))
@@ -166,7 +207,6 @@ public sealed class FileStreamSourceTask : SourceTask
             {
                 _stream.Seek(_streamOffset, SeekOrigin.Begin);
             }
-            _reader = new StreamReader(_stream);
         }
     }
 }

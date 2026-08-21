@@ -122,9 +122,11 @@ public sealed class BigtableSourceTask : SourceTask
                 _lastRowKey = row.Key.ToStringUtf8();
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the failure (auth/config errors would otherwise poll silently forever);
+            // rows collected before it are still returned - _lastRowKey matches the last of them.
+            Context.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -134,6 +136,8 @@ public sealed class BigtableSourceTask : SourceTask
     {
         var rowSet = new RowSet();
 
+        // _lastRowKey was read from within the configured range, so continuing after it
+        // (exclusive) stays inside the range and advances past already-emitted rows.
         if (!string.IsNullOrEmpty(_rowKeyPrefix))
         {
             // Create a prefix range manually
@@ -143,16 +147,28 @@ public sealed class BigtableSourceTask : SourceTask
             // Increment the last byte to create an exclusive end key
             endBytes[^1]++;
 
-            rowSet.RowRanges.Add(new RowRange
+            var range = new RowRange
             {
-                StartKeyClosed = ByteString.CopyFrom(prefixBytes),
                 EndKeyOpen = ByteString.CopyFrom(endBytes)
-            });
+            };
+            if (!string.IsNullOrEmpty(_lastRowKey))
+            {
+                range.StartKeyOpen = ByteString.CopyFromUtf8(_lastRowKey);
+            }
+            else
+            {
+                range.StartKeyClosed = ByteString.CopyFrom(prefixBytes);
+            }
+            rowSet.RowRanges.Add(range);
         }
         else if (!string.IsNullOrEmpty(_rowKeyStart) || !string.IsNullOrEmpty(_rowKeyEnd))
         {
             var range = new RowRange();
-            if (!string.IsNullOrEmpty(_rowKeyStart))
+            if (!string.IsNullOrEmpty(_lastRowKey))
+            {
+                range.StartKeyOpen = ByteString.CopyFromUtf8(_lastRowKey);
+            }
+            else if (!string.IsNullOrEmpty(_rowKeyStart))
             {
                 range.StartKeyClosed = ByteString.CopyFromUtf8(_rowKeyStart);
             }

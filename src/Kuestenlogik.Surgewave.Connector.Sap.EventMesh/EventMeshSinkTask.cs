@@ -59,20 +59,12 @@ public sealed class EventMeshSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
-            try
-            {
-                var message = CreateMessage(record);
-                batch.Add(message);
+            batch.Add(CreateMessage(record));
 
-                if (batch.Count >= _batchSize)
-                {
-                    await PublishBatchAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
-            }
-            catch (Exception)
+            if (batch.Count >= _batchSize)
             {
-                // Log and continue
+                await PublishBatchAsync(batch, cancellationToken);
+                batch.Clear();
             }
         }
 
@@ -157,9 +149,12 @@ public sealed class EventMeshSinkTask : SinkTask
             var response = await _httpClient!.SendAsync(request, ct);
             response.EnsureSuccessStatusCode();
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Log and continue
+            // A failed publish must propagate so the worker retries and dead-letters
+            // instead of committing offsets for an undelivered batch.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
     }
 

@@ -52,6 +52,7 @@ public sealed class TwitterSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
+            object payload;
             try
             {
                 var json = Encoding.UTF8.GetString(record.Value);
@@ -61,7 +62,6 @@ public sealed class TwitterSinkTask : SinkTask
                 var text = data.TryGetValue(_textField, out var textEl) ? textEl.GetString() : json;
                 if (string.IsNullOrEmpty(text)) continue;
 
-                object payload;
                 if (!string.IsNullOrEmpty(_replyToField) && data.TryGetValue(_replyToField, out var replyEl))
                 {
                     var replyToId = replyEl.GetString();
@@ -71,21 +71,32 @@ public sealed class TwitterSinkTask : SinkTask
                 {
                     payload = new { text };
                 }
-
-                var payloadJson = JsonSerializer.Serialize(payload, JsonOptions);
-                using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("tweets", UriKind.Relative))
-                {
-                    Content = new StringContent(payloadJson, Encoding.UTF8, "application/json")
-                };
-
-                // Add OAuth 1.0a header
-                var oauthHeader = GenerateOAuthHeader("POST", "https://api.twitter.com/2/tweets");
-                request.Headers.Authorization = new AuthenticationHeaderValue("OAuth", oauthHeader);
-
-                using var response = await _httpClient.SendAsync(request, cancellationToken);
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
             {
+                // Malformed record: surface and skip. Delivery failures below must throw.
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
+
+            var payloadJson = JsonSerializer.Serialize(payload, JsonOptions);
+            using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("tweets", UriKind.Relative))
+            {
+                Content = new StringContent(payloadJson, Encoding.UTF8, "application/json")
+            };
+
+            // Add OAuth 1.0a header
+            var oauthHeader = GenerateOAuthHeader("POST", "https://api.twitter.com/2/tweets");
+            request.Headers.Authorization = new AuthenticationHeaderValue("OAuth", oauthHeader);
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var error = new HttpRequestException(
+                    $"Twitter API returned {(int)response.StatusCode} ({response.StatusCode}) posting a tweet: {body}");
+                Context?.RaiseError?.Invoke(error);
+                throw error;
             }
         }
     }

@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.PhotosLibrary.v1;
 using Google.Apis.PhotosLibrary.v1.Data;
 using Google.Apis.Services;
@@ -21,7 +23,8 @@ public sealed class GooglePhotosSinkTask : SinkTask
     private string? _albumId;
     private bool _createAlbum;
     private string? _albumTitle;
-    private GoogleCredential? _credential;
+    private ICredential? _credential;
+    private GoogleAuthorizationCodeFlow? _authFlow;
 
     public override string Version => "1.0.0";
 
@@ -34,21 +37,33 @@ public sealed class GooglePhotosSinkTask : SinkTask
         // Initialize Google Photos API client
         if (config.TryGetValue(GooglePhotosConnectorConfig.CredentialsJson, out var json) && !string.IsNullOrWhiteSpace(json))
         {
-            _credential = GoogleCredential.FromJson(json);
+            _credential = GoogleCredential.FromJson(json).CreateScoped(
+                PhotosLibraryService.Scope.Photoslibrary,
+                PhotosLibraryService.Scope.PhotoslibraryAppendonly);
         }
         else if (config.TryGetValue(GooglePhotosConnectorConfig.CredentialsFile, out var file) && !string.IsNullOrWhiteSpace(file))
         {
-            _credential = GoogleCredential.FromFile(file);
+            _credential = GoogleCredential.FromFile(file).CreateScoped(
+                PhotosLibraryService.Scope.Photoslibrary,
+                PhotosLibraryService.Scope.PhotoslibraryAppendonly);
         }
         else
         {
+            // OAuth2 flow: the refresh token is exchanged for access tokens via the client credentials
+            var clientId = config[GooglePhotosConnectorConfig.ClientId];
+            var clientSecret = config[GooglePhotosConnectorConfig.ClientSecret];
             var refreshToken = config[GooglePhotosConnectorConfig.RefreshToken];
-            _credential = GoogleCredential.FromAccessToken(refreshToken);
-        }
 
-        _credential = _credential.CreateScoped(
-            PhotosLibraryService.Scope.Photoslibrary,
-            PhotosLibraryService.Scope.PhotoslibraryAppendonly);
+            // owned by the task and disposed in Stop(): the credential keeps using
+            // the flow for token refreshes after Start returns
+            _authFlow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+            {
+                ClientSecrets = new ClientSecrets { ClientId = clientId, ClientSecret = clientSecret },
+                Scopes = [PhotosLibraryService.Scope.Photoslibrary, PhotosLibraryService.Scope.PhotoslibraryAppendonly]
+            });
+
+            _credential = new UserCredential(_authFlow, "user", new TokenResponse { RefreshToken = refreshToken });
+        }
 
         _service = new PhotosLibraryService(new BaseClientService.Initializer
         {
@@ -94,10 +109,7 @@ public sealed class GooglePhotosSinkTask : SinkTask
 
             // Upload bytes to get upload token
             var uploadToken = await UploadBytesAsync(record.Value, filename, cancellationToken);
-            if (!string.IsNullOrEmpty(uploadToken))
-            {
-                uploadTokens.Add((uploadToken, filename, description));
-            }
+            uploadTokens.Add((uploadToken, filename, description));
         }
 
         if (uploadTokens.Count > 0)
@@ -106,11 +118,11 @@ public sealed class GooglePhotosSinkTask : SinkTask
         }
     }
 
-    private async Task<string?> UploadBytesAsync(byte[] content, string filename, CancellationToken cancellationToken)
+    private async Task<string> UploadBytesAsync(byte[] content, string filename, CancellationToken cancellationToken)
     {
         try
         {
-            var accessToken = await _credential!.UnderlyingCredential.GetAccessTokenForRequestAsync(cancellationToken: cancellationToken);
+            var accessToken = await _credential!.GetAccessTokenForRequestAsync(cancellationToken: cancellationToken);
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "https://photoslibrary.googleapis.com/v1/uploads")
             {
@@ -123,17 +135,14 @@ public sealed class GooglePhotosSinkTask : SinkTask
             request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
             using var response = await _httpClient!.SendAsync(request, cancellationToken);
-            if (response.IsSuccessStatusCode)
-            {
-                return await response.Content.ReadAsStringAsync(cancellationToken);
-            }
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync(cancellationToken);
         }
-        catch
+        catch (Exception ex)
         {
-            // Upload failed
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
-
-        return null;
     }
 
     private async Task CreateMediaItemsAsync(List<(string token, string filename, string description)> uploads, CancellationToken cancellationToken)
@@ -205,6 +214,7 @@ public sealed class GooglePhotosSinkTask : SinkTask
     {
         _service?.Dispose();
         _httpClient?.Dispose();
+        _authFlow?.Dispose();
     }
 
     protected override void Dispose(bool disposing)

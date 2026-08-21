@@ -37,6 +37,10 @@ public sealed class SnowflakeSourceTask : SourceTask
     private object? _lastTimestamp;
     private object? _lastIncrementingValue;
     private bool _streamCreated;
+    private bool _stagingCreated;
+    private bool _streamTxnOpen;
+
+    private string StreamStagingTableName => $"{_streamName}_STAGING";
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -217,27 +221,38 @@ public sealed class SnowflakeSourceTask : SourceTask
 
         try
         {
-            var sql = BuildQuery();
-
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = sql;
-
-            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            var columnNames = GetColumnNames(reader);
-
-            while (await reader.ReadAsync(cancellationToken) && records.Count < _maxRowsPerPoll)
+            var isStream = _mode.Equals("stream", StringComparison.OrdinalIgnoreCase);
+            if (isStream)
             {
-                var record = ConvertToSourceRecord(reader, columnNames);
-                records.Add(record);
-
-                // Update tracking columns
-                UpdateTrackingValues(reader, columnNames);
+                BeginStreamWindow();
             }
 
-            // If stream mode, consume the stream data
-            if (_mode.Equals("stream", StringComparison.OrdinalIgnoreCase) && records.Count > 0)
+            var sql = BuildQuery();
+
+            using (var cmd = _connection.CreateCommand())
             {
-                // Stream data is automatically consumed when read
+                cmd.CommandText = sql;
+
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                var columnNames = GetColumnNames(reader);
+
+                // Stream mode must emit the whole captured window: the INSERT below
+                // already consumed the stream, so capping here would drop changes
+                while (await reader.ReadAsync(cancellationToken) && (isStream || records.Count < _maxRowsPerPoll))
+                {
+                    var record = ConvertToSourceRecord(reader, columnNames);
+                    records.Add(record);
+
+                    // Update tracking columns
+                    UpdateTrackingValues(reader, columnNames);
+                }
+            }
+
+            if (isStream && records.Count == 0)
+            {
+                // Nothing captured - release the transaction so the stream offset is untouched
+                ExecuteNonQuery("ROLLBACK");
+                _streamTxnOpen = false;
             }
 
             if (records.Count == 0)
@@ -253,6 +268,61 @@ public sealed class SnowflakeSourceTask : SourceTask
         return records;
     }
 
+    /// <summary>
+    /// A plain SELECT never advances a Snowflake stream offset - only DML inside a
+    /// committed transaction consumes it. Each poll captures the stream into a
+    /// session-scoped staging table inside a transaction that stays open until
+    /// <see cref="CommitAsync"/>, so a failure before commit rolls the stream back
+    /// and the window is re-delivered (at-least-once).
+    /// </summary>
+    private void BeginStreamWindow()
+    {
+        if (_streamTxnOpen)
+        {
+            // The previous window was never committed - re-deliver it from the stream
+            ExecuteNonQuery("ROLLBACK");
+            _streamTxnOpen = false;
+        }
+
+        if (!_stagingCreated)
+        {
+            var sourceTable = string.IsNullOrEmpty(_table)
+                ? ResolveStreamSourceTable()
+                : QuoteIdentifier(_table);
+
+            // Shape of the stream: source columns plus the CDC metadata columns.
+            // Built from the source table because reading the stream in DDL/DML
+            // would already consume it.
+            ExecuteNonQuery($@"CREATE TEMPORARY TABLE IF NOT EXISTS {QuoteIdentifier(StreamStagingTableName)} AS
+                SELECT *,
+                       CAST(NULL AS VARCHAR) AS ""METADATA$ACTION"",
+                       CAST(NULL AS BOOLEAN) AS ""METADATA$ISUPDATE"",
+                       CAST(NULL AS VARCHAR) AS ""METADATA$ROW_ID""
+                FROM {sourceTable} WHERE FALSE");
+            _stagingCreated = true;
+        }
+
+        // Clear rows left over from an already committed window
+        ExecuteNonQuery($"DELETE FROM {QuoteIdentifier(StreamStagingTableName)}");
+
+        ExecuteNonQuery("BEGIN");
+        _streamTxnOpen = true;
+        ExecuteNonQuery($"INSERT INTO {QuoteIdentifier(StreamStagingTableName)} SELECT * FROM {QuoteIdentifier(_streamName)}");
+    }
+
+    private string ResolveStreamSourceTable()
+    {
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = $"DESC STREAM {QuoteIdentifier(_streamName)}";
+        using var reader = cmd.ExecuteReader();
+        if (reader.Read())
+        {
+            return reader.GetString(reader.GetOrdinal("table_name"));
+        }
+
+        throw new InvalidOperationException($"Cannot resolve the source table of stream '{_streamName}'.");
+    }
+
     private string BuildQuery()
     {
         return _mode.ToLowerInvariant() switch
@@ -265,7 +335,7 @@ public sealed class SnowflakeSourceTask : SourceTask
 
     private string BuildStreamQuery()
     {
-        return $"SELECT * FROM {QuoteIdentifier(_streamName)} LIMIT {_maxRowsPerPoll}";
+        return $"SELECT * FROM {QuoteIdentifier(StreamStagingTableName)}";
     }
 
     private string BuildCustomQuery()
@@ -547,7 +617,14 @@ public sealed class SnowflakeSourceTask : SourceTask
 
     public override Task CommitAsync(CancellationToken cancellationToken)
     {
-        // Position is tracked via offset storage automatically
+        if (_streamTxnOpen)
+        {
+            // Committing the transaction is what advances the stream offset
+            ExecuteNonQuery("COMMIT");
+            _streamTxnOpen = false;
+        }
+
+        // Table/query position is tracked via offset storage automatically
         return Task.CompletedTask;
     }
 }

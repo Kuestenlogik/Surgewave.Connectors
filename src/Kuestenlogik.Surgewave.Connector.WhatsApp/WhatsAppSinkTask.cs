@@ -94,9 +94,16 @@ public sealed class WhatsAppSinkTask : SinkTask
 
                 using var content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
                 using var response = await _httpClient.PostAsync(new Uri($"{_phoneNumberId}/messages", UriKind.Relative), content, cancellationToken);
+                response.EnsureSuccessStatusCode();
             }
-            catch (Exception)
+            catch (OperationCanceledException)
             {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

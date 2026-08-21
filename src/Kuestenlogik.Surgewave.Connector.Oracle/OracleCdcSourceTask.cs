@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
@@ -39,6 +40,15 @@ public sealed class OracleCdcSourceTask : SourceTask
 
     private long? _lastScn;
     private bool _snapshotCompleted;
+
+    private OracleConnection? _snapshotConnection;
+    private OracleCommand? _snapshotCommand;
+    private DbDataReader? _snapshotReader;
+    private List<string> _snapshotColumns = [];
+    private int _snapshotTableIndex;
+    private string _snapshotOwner = "";
+    private string _snapshotTableName = "";
+
     private readonly Dictionary<string, List<string>> _tableColumns = new();
     private readonly HashSet<string> _tableOwners = new();
     private readonly Dictionary<string, object> _sourcePartition = new();
@@ -127,7 +137,7 @@ public sealed class OracleCdcSourceTask : SourceTask
 
     public override void Stop()
     {
-        // No persistent connections to clean up
+        CloseSnapshotAsync().GetAwaiter().GetResult();
     }
 
     protected override void Dispose(bool disposing)
@@ -150,13 +160,16 @@ public sealed class OracleCdcSourceTask : SourceTask
         // Check if we need to do initial snapshot
         if (_snapshotMode != OracleConnectorConfig.SnapshotModeNever && !_snapshotCompleted)
         {
-            if (_snapshotMode != OracleConnectorConfig.SnapshotModeSchemaOnly)
+            if (_snapshotMode == OracleConnectorConfig.SnapshotModeSchemaOnly)
+            {
+                _snapshotCompleted = true;
+            }
+            else
             {
                 var snapshotRecords = await PerformSnapshotAsync(cancellationToken);
                 if (snapshotRecords.Count > 0)
                     return snapshotRecords;
             }
-            _snapshotCompleted = true;
         }
 
         // Initialize SCN if not set
@@ -242,31 +255,56 @@ public sealed class OracleCdcSourceTask : SourceTask
     {
         var records = new List<SourceRecord>();
 
-        await using var conn = new OracleConnection(_connectionString);
-        await conn.OpenAsync(cancellationToken);
-
-        foreach (var table in _tables)
+        try
         {
-            var (owner, tableName) = ParseTableName(table);
-
-            await using var cmd = conn.CreateCommand();
-#pragma warning disable CA2100 // SQL injection - table names validated via all_tab_columns
-            cmd.CommandText = $"SELECT * FROM \"{owner}\".\"{tableName}\"";
-#pragma warning restore CA2100
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-
-            var columns = new List<string>();
-            for (var i = 0; i < reader.FieldCount; i++)
+            if (_snapshotConnection == null)
             {
-                columns.Add(reader.GetName(i));
+                _snapshotConnection = new OracleConnection(_connectionString);
+                await _snapshotConnection.OpenAsync(cancellationToken);
             }
 
-            while (await reader.ReadAsync(cancellationToken))
+            // The reader is kept open across polls so the snapshot resumes where the
+            // previous batch stopped instead of re-reading each table from the start.
+            while (records.Count < _batchMaxRecords)
             {
-                var row = new Dictionary<string, object?>();
-                for (var i = 0; i < reader.FieldCount; i++)
+                if (_snapshotReader == null)
                 {
-                    row[columns[i]] = reader.IsDBNull(i) ? null : ConvertValue(reader.GetValue(i));
+                    if (_snapshotTableIndex >= _tables.Length)
+                    {
+                        await CloseSnapshotAsync();
+                        _snapshotCompleted = true;
+                        break;
+                    }
+
+                    (_snapshotOwner, _snapshotTableName) = ParseTableName(_tables[_snapshotTableIndex]);
+
+                    _snapshotCommand = _snapshotConnection.CreateCommand();
+#pragma warning disable CA2100 // SQL injection - table names validated via all_tab_columns
+                    _snapshotCommand.CommandText = $"SELECT * FROM \"{_snapshotOwner}\".\"{_snapshotTableName}\"";
+#pragma warning restore CA2100
+                    _snapshotReader = await _snapshotCommand.ExecuteReaderAsync(cancellationToken);
+
+                    _snapshotColumns = [];
+                    for (var i = 0; i < _snapshotReader.FieldCount; i++)
+                    {
+                        _snapshotColumns.Add(_snapshotReader.GetName(i));
+                    }
+                }
+
+                if (!await _snapshotReader.ReadAsync(cancellationToken))
+                {
+                    await _snapshotReader.DisposeAsync();
+                    _snapshotReader = null;
+                    await _snapshotCommand!.DisposeAsync();
+                    _snapshotCommand = null;
+                    _snapshotTableIndex++;
+                    continue;
+                }
+
+                var row = new Dictionary<string, object?>();
+                for (var i = 0; i < _snapshotReader.FieldCount; i++)
+                {
+                    row[_snapshotColumns[i]] = _snapshotReader.IsDBNull(i) ? null : ConvertValue(_snapshotReader.GetValue(i));
                 }
 
                 var payload = new Dictionary<string, object?>
@@ -274,8 +312,8 @@ public sealed class OracleCdcSourceTask : SourceTask
                     ["op"] = "r", // read/snapshot
                     ["source"] = new Dictionary<string, object>
                     {
-                        ["owner"] = owner,
-                        ["table"] = tableName,
+                        ["owner"] = _snapshotOwner,
+                        ["table"] = _snapshotTableName,
                         ["snapshot"] = true,
                         ["host"] = _host
                     },
@@ -292,24 +330,48 @@ public sealed class OracleCdcSourceTask : SourceTask
                         [OracleConnectorConfig.OffsetScn] = _lastScn?.ToString() ?? "0",
                         [OracleConnectorConfig.OffsetSnapshotCompleted] = "false"
                     },
-                    Topic = GetTopicName(owner, tableName),
+                    Topic = GetTopicName(_snapshotOwner, _snapshotTableName),
                     Key = GetPrimaryKeyBytes(row),
                     Value = JsonSerializer.SerializeToUtf8Bytes(payload),
                     Timestamp = DateTimeOffset.UtcNow,
                     Headers = new Dictionary<string, byte[]>
                     {
-                        [OracleConnectorConfig.HeaderSchema] = Encoding.UTF8.GetBytes(owner),
-                        [OracleConnectorConfig.HeaderTable] = Encoding.UTF8.GetBytes(tableName),
+                        [OracleConnectorConfig.HeaderSchema] = Encoding.UTF8.GetBytes(_snapshotOwner),
+                        [OracleConnectorConfig.HeaderTable] = Encoding.UTF8.GetBytes(_snapshotTableName),
                         [OracleConnectorConfig.HeaderOperation] = Encoding.UTF8.GetBytes("r")
                     }
                 });
-
-                if (records.Count >= _batchMaxRecords)
-                    return records;
             }
+        }
+        catch
+        {
+            // A broken reader cannot resume; restart the current table on the next poll.
+            await CloseSnapshotAsync();
+            throw;
         }
 
         return records;
+    }
+
+    private async Task CloseSnapshotAsync()
+    {
+        if (_snapshotReader != null)
+        {
+            await _snapshotReader.DisposeAsync();
+            _snapshotReader = null;
+        }
+
+        if (_snapshotCommand != null)
+        {
+            await _snapshotCommand.DisposeAsync();
+            _snapshotCommand = null;
+        }
+
+        if (_snapshotConnection != null)
+        {
+            await _snapshotConnection.DisposeAsync();
+            _snapshotConnection = null;
+        }
     }
 
     private async Task<List<SourceRecord>> PollLogMinerChangesAsync(CancellationToken cancellationToken)
@@ -335,21 +397,32 @@ public sealed class OracleCdcSourceTask : SourceTask
             await StartLogMinerAsync(conn, _lastScn!.Value, currentScn, cancellationToken);
 
             // Query changes
-            records = await QueryLogMinerContentsAsync(conn, cancellationToken);
+            (records, var truncatedAtScn) = await QueryLogMinerContentsAsync(conn, cancellationToken);
 
             // End LogMiner session
             await EndLogMinerAsync(conn, cancellationToken);
 
             // Update last SCN
-            if (records.Count > 0)
+            if (truncatedAtScn.HasValue)
+            {
+                // Batch cap hit inside the mined window: resume from the last emitted SCN
+                // (inclusive, so rows sharing that SCN may repeat) instead of skipping the rest.
+                _lastScn = truncatedAtScn.Value;
+            }
+            else if (records.Count > 0)
             {
                 _lastScn = currentScn;
             }
         }
         catch (OracleException ex) when (ex.Number == 1291) // ORA-01291: missing log file
         {
-            // Log gap detected, skip to current SCN
-            _lastScn = currentScn;
+            // A redo log gap means changes in [_lastScn, currentScn] are unrecoverable;
+            // fail the task instead of silently dropping them.
+            var gap = new InvalidOperationException(
+                $"Redo log gap detected (ORA-01291): changes between SCN {_lastScn} and {currentScn} are no longer available. " +
+                "Increase redo/archive log retention or re-run the initial snapshot.", ex);
+            Context?.RaiseError?.Invoke(gap);
+            throw gap;
         }
 
         return records;
@@ -359,20 +432,26 @@ public sealed class OracleCdcSourceTask : SourceTask
     {
         await using var cmd = conn.CreateCommand();
 
-        // Add online redo logs
+        // Add online redo logs: one member per group, first call resets the list via NEW
         if (_logMinerMode == OracleConnectorConfig.LogMinerModeOnline)
         {
             cmd.CommandText = @"
+                DECLARE
+                    first_file BOOLEAN := TRUE;
                 BEGIN
-                    DBMS_LOGMNR.ADD_LOGFILE(
-                        LOGFILENAME => (SELECT member FROM v$logfile WHERE rownum = 1),
-                        OPTIONS => DBMS_LOGMNR.NEW
-                    );
-                    FOR rec IN (SELECT member FROM v$logfile WHERE rownum > 1) LOOP
-                        DBMS_LOGMNR.ADD_LOGFILE(
-                            LOGFILENAME => rec.member,
-                            OPTIONS => DBMS_LOGMNR.ADDFILE
-                        );
+                    FOR rec IN (SELECT MIN(member) AS member FROM v$logfile GROUP BY group#) LOOP
+                        IF first_file THEN
+                            DBMS_LOGMNR.ADD_LOGFILE(
+                                LOGFILENAME => rec.member,
+                                OPTIONS => DBMS_LOGMNR.NEW
+                            );
+                            first_file := FALSE;
+                        ELSE
+                            DBMS_LOGMNR.ADD_LOGFILE(
+                                LOGFILENAME => rec.member,
+                                OPTIONS => DBMS_LOGMNR.ADDFILE
+                            );
+                        END IF;
                     END LOOP;
                 END;";
             await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -413,9 +492,10 @@ public sealed class OracleCdcSourceTask : SourceTask
         }
     }
 
-    private async Task<List<SourceRecord>> QueryLogMinerContentsAsync(OracleConnection conn, CancellationToken cancellationToken)
+    private async Task<(List<SourceRecord> Records, long? TruncatedAtScn)> QueryLogMinerContentsAsync(OracleConnection conn, CancellationToken cancellationToken)
     {
         var records = new List<SourceRecord>();
+        long? truncatedAtScn = null;
 
         await using var cmd = conn.CreateCommand();
 
@@ -476,11 +556,14 @@ public sealed class OracleCdcSourceTask : SourceTask
             {
                 records.Add(record);
                 if (records.Count >= _batchMaxRecords)
+                {
+                    truncatedAtScn = scn;
                     break;
+                }
             }
         }
 
-        return records;
+        return (records, truncatedAtScn);
     }
 
     private SourceRecord? ParseInsertRecord(string owner, string tableName, string sqlRedo, long scn, DateTime timestamp)

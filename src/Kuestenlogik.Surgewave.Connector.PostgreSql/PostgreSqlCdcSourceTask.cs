@@ -1,6 +1,7 @@
 namespace Kuestenlogik.Surgewave.Connector.PostgreSql;
 
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
@@ -33,8 +34,11 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
     private LogicalReplicationConnection? _replicationConnection;
     private NpgsqlLogSequenceNumber _lastLsn;
     private bool _snapshotCompleted;
+    private bool _replicationObjectsEnsured;
     private CancellationTokenSource? _replicationCts;
     private IAsyncEnumerator<PgOutputReplicationMessage>? _replicationEnumerator;
+    private Task<bool>? _pendingReplicationMoveNext;
+    private IAsyncEnumerator<SourceRecord>? _snapshotEnumerator;
 
     private readonly Dictionary<string, object> _sourcePartition = new();
 
@@ -88,10 +92,13 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
     public override void Stop()
     {
         _replicationCts?.Cancel();
+        _snapshotEnumerator?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _replicationEnumerator?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _replicationConnection?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _replicationConnection = null;
         _replicationEnumerator = null;
+        _pendingReplicationMoveNext = null;
+        _snapshotEnumerator = null;
         _replicationCts = null;
     }
 
@@ -109,14 +116,25 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
         // Check if we need to do initial snapshot
         if (_snapshotMode != PostgreSqlConnectorConfig.SnapshotModeNever && !_snapshotCompleted)
         {
-            if (_snapshotMode == PostgreSqlConnectorConfig.SnapshotModeAlways || !_snapshotCompleted)
-            {
-                var snapshotRecords = await PerformSnapshotAsync(cancellationToken);
-                if (snapshotRecords.Count > 0)
-                    return snapshotRecords;
+            // Create the publication and slot before reading the snapshot so changes
+            // committed while the snapshot runs are retained in WAL and replayed
+            // once replication starts.
+            await EnsureReplicationObjectsAsync(cancellationToken);
 
-                _snapshotCompleted = true;
+            _snapshotEnumerator ??= ReadSnapshotRecordsAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+
+            var snapshotRecords = new List<SourceRecord>();
+            while (snapshotRecords.Count < _batchMaxRecords && await _snapshotEnumerator.MoveNextAsync())
+            {
+                snapshotRecords.Add(_snapshotEnumerator.Current);
             }
+
+            if (snapshotRecords.Count > 0)
+                return snapshotRecords;
+
+            await _snapshotEnumerator.DisposeAsync();
+            _snapshotEnumerator = null;
+            _snapshotCompleted = true;
         }
 
         // Start replication if not started
@@ -127,43 +145,43 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
 
         var records = new List<SourceRecord>();
 
-        // Use a timeout for non-blocking poll
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(_pollIntervalMs));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        // The replication enumerator is bound to the token from Start and has no
+        // per-call timeout, so race each advance against a poll deadline; an advance
+        // that misses the deadline is parked and resumed on the next poll.
+        var pollDeadline = Task.Delay(TimeSpan.FromMilliseconds(_pollIntervalMs), cancellationToken);
 
-        try
+        while (records.Count < _batchMaxRecords)
         {
-            while (records.Count < _batchMaxRecords)
+            if (_replicationEnumerator == null)
+                break;
+
+            var moveNext = _pendingReplicationMoveNext ?? _replicationEnumerator.MoveNextAsync().AsTask();
+            _pendingReplicationMoveNext = null;
+
+            if (await Task.WhenAny(moveNext, pollDeadline) == pollDeadline)
             {
-                if (_replicationEnumerator == null)
-                    break;
-
-                var hasNext = await _replicationEnumerator.MoveNextAsync();
-                if (!hasNext)
-                    break;
-
-                var message = _replicationEnumerator.Current;
-                var record = await CreateSourceRecordAsync(message, cancellationToken);
-                if (record != null)
-                {
-                    records.Add(record);
-                }
-
-                _lastLsn = message.WalEnd;
+                _pendingReplicationMoveNext = moveNext;
+                break;
             }
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-        {
-            // Timeout - return what we have
+
+            if (!await moveNext)
+                break;
+
+            var message = _replicationEnumerator.Current;
+            var record = await CreateSourceRecordAsync(message, cancellationToken);
+            if (record != null)
+            {
+                records.Add(record);
+            }
+
+            _lastLsn = message.WalEnd;
         }
 
         return records;
     }
 
-    private async Task<List<SourceRecord>> PerformSnapshotAsync(CancellationToken cancellationToken)
+    private async IAsyncEnumerable<SourceRecord> ReadSnapshotRecordsAsync([EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var records = new List<SourceRecord>();
-
         await using var conn = new NpgsqlConnection(_connectionString);
         await conn.OpenAsync(cancellationToken);
 
@@ -206,7 +224,7 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
                     ["ts_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
                 };
 
-                records.Add(new SourceRecord
+                yield return new SourceRecord
                 {
                     SourcePartition = _sourcePartition,
                     SourceOffset = new Dictionary<string, object>
@@ -224,18 +242,16 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
                         ["postgresql.table"] = Encoding.UTF8.GetBytes(tableName),
                         ["postgresql.op"] = Encoding.UTF8.GetBytes("r")
                     }
-                });
-
-                if (records.Count >= _batchMaxRecords)
-                    return records;
+                };
             }
         }
-
-        return records;
     }
 
-    private async Task StartReplicationAsync(CancellationToken cancellationToken)
+    private async Task EnsureReplicationObjectsAsync(CancellationToken cancellationToken)
     {
+        if (_replicationObjectsEnsured)
+            return;
+
         // Create publication if needed
         if (_createPublication)
         {
@@ -247,6 +263,13 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
         {
             await CreateReplicationSlotAsync(cancellationToken);
         }
+
+        _replicationObjectsEnsured = true;
+    }
+
+    private async Task StartReplicationAsync(CancellationToken cancellationToken)
+    {
+        await EnsureReplicationObjectsAsync(cancellationToken);
 
         // Start the replication connection
         _replicationConnection = new LogicalReplicationConnection(_connectionString);
@@ -365,16 +388,18 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
     {
         var schema = msg.Relation.Namespace;
         var table = msg.Relation.RelationName;
-        var afterRow = await ReadRowValuesAsync(msg.NewRow, msg.Relation, cancellationToken);
-        Dictionary<string, object?>? beforeRow = null;
 
-        // For before values, we need REPLICA IDENTITY FULL on the table
-        // The OldRow property exists but may be empty if not configured
-        if (_includeBeforeValues)
+        // pgoutput sends the old row (REPLICA IDENTITY FULL) or the old key
+        // (REPLICA IDENTITY DEFAULT/USING INDEX with a changed key) before the new
+        // row, and the tuples must be consumed in wire order.
+        var oldRow = msg switch
         {
-            // Try to get old values if available
-            // Note: Requires REPLICA IDENTITY FULL on the source table
-        }
+            FullUpdateMessage full => await ReadRowValuesAsync(full.OldRow, msg.Relation, cancellationToken),
+            IndexUpdateMessage index => await ReadRowValuesAsync(index.Key, msg.Relation, cancellationToken),
+            _ => null
+        };
+        var afterRow = await ReadRowValuesAsync(msg.NewRow, msg.Relation, cancellationToken);
+        var beforeRow = _includeBeforeValues ? oldRow : null;
 
         var payload = new Dictionary<string, object?>
         {
@@ -411,17 +436,20 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
         };
     }
 
-    private Task<SourceRecord> CreateDeleteRecordAsync(DeleteMessage msg, CancellationToken cancellationToken)
+    private async Task<SourceRecord> CreateDeleteRecordAsync(DeleteMessage msg, CancellationToken cancellationToken)
     {
-        _ = cancellationToken; // Not used since we don't have row data in delete messages
-
         var schema = msg.Relation.Namespace;
         var table = msg.Relation.RelationName;
 
-        // For delete messages, we create a tombstone record
-        // The key columns depend on REPLICA IDENTITY setting on the table
-        // Note: With REPLICA IDENTITY DEFAULT, only primary key is available
-        // With REPLICA IDENTITY FULL, all columns are available
+        // The available columns depend on the REPLICA IDENTITY setting on the table:
+        // FULL carries the whole old row, DEFAULT/USING INDEX only the key columns.
+        var oldRow = msg switch
+        {
+            FullDeleteMessage full => await ReadRowValuesAsync(full.OldRow, msg.Relation, cancellationToken),
+            KeyDeleteMessage key => await ReadRowValuesAsync(key.Key, msg.Relation, cancellationToken),
+            _ => null
+        };
+
         var payload = new Dictionary<string, object?>
         {
             ["op"] = "d", // delete
@@ -431,12 +459,12 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
                 ["table"] = table,
                 ["lsn"] = _lastLsn.ToString()
             },
-            ["before"] = null, // Old row data not easily accessible in Npgsql 9.x
+            ["before"] = _includeBeforeValues ? oldRow : null,
             ["after"] = null,
             ["ts_ms"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
 
-        return Task.FromResult(new SourceRecord
+        return new SourceRecord
         {
             SourcePartition = _sourcePartition,
             SourceOffset = new Dictionary<string, object>
@@ -445,7 +473,7 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
                 ["snapshot_completed"] = _snapshotCompleted ? "true" : "false"
             },
             Topic = GetTopicName(schema, table),
-            Key = [], // Key extraction would require iterating the message
+            Key = oldRow != null ? GetPrimaryKeyBytes(oldRow) : [],
             Value = JsonSerializer.SerializeToUtf8Bytes(payload),
             Timestamp = DateTimeOffset.UtcNow,
             Headers = new Dictionary<string, byte[]>
@@ -454,7 +482,7 @@ public sealed class PostgreSqlCdcSourceTask : SourceTask
                 ["postgresql.table"] = Encoding.UTF8.GetBytes(table),
                 ["postgresql.op"] = Encoding.UTF8.GetBytes("d")
             }
-        });
+        };
     }
 
     private static async Task<Dictionary<string, object?>> ReadRowValuesAsync(

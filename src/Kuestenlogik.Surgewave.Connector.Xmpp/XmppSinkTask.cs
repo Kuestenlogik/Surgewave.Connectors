@@ -76,7 +76,12 @@ public sealed class XmppSinkTask : SinkTask
             retries++;
         }
 
-        if (!_isConnected) return;
+        if (!_isConnected)
+        {
+            var ex = new InvalidOperationException("XMPP connection is not established; batch cannot be delivered.");
+            Context?.RaiseError?.Invoke(ex);
+            throw ex;
+        }
 
         foreach (var record in records)
         {
@@ -133,9 +138,14 @@ public sealed class XmppSinkTask : SinkTask
 
                 await _client!.SendAsync(message);
             }
-            catch (Exception)
+            catch (OperationCanceledException)
             {
-                // Log and continue
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

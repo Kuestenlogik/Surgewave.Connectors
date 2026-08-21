@@ -20,6 +20,8 @@ public sealed class SnowflakeSinkTask : SinkTask
     public override string Version => "1.0.0";
 
     private SnowflakeDbConnection? _connection;
+    private string _connectionString = "";
+    private string _warehouse = "";
     private string _database = "";
     private string _schema = "PUBLIC";
     private string _table = "";
@@ -49,15 +51,22 @@ public sealed class SnowflakeSinkTask : SinkTask
             : keyColumnsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         // Build connection string
-        var connectionString = BuildConnectionString(config);
-        _connection = new SnowflakeDbConnection(connectionString);
+        _connectionString = BuildConnectionString(config);
+        _warehouse = GetConfigValue(config, SnowflakeConnectorConfig.WarehouseConfig, "");
+
+        OpenConnection();
+    }
+
+    private void OpenConnection()
+    {
+        _connection?.Dispose();
+        _connection = new SnowflakeDbConnection(_connectionString);
         _connection.Open();
 
         // Set warehouse if specified
-        var warehouse = GetConfigValue(config, SnowflakeConnectorConfig.WarehouseConfig, "");
-        if (!string.IsNullOrEmpty(warehouse))
+        if (!string.IsNullOrEmpty(_warehouse))
         {
-            ExecuteNonQuery($"USE WAREHOUSE {QuoteIdentifier(warehouse)}");
+            ExecuteNonQuery($"USE WAREHOUSE {QuoteIdentifier(_warehouse)}");
         }
 
         // Set database and schema
@@ -142,8 +151,15 @@ public sealed class SnowflakeSinkTask : SinkTask
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
-        if (_connection == null || _connection.State != ConnectionState.Open || records.Count == 0)
+        if (records.Count == 0)
             return;
+
+        if (_connection == null || _connection.State != ConnectionState.Open)
+        {
+            // Reconnect after a dropped connection; a failure here propagates so the
+            // worker retries the batch instead of committing offsets for undelivered data
+            OpenConnection();
+        }
 
         // Verify/create table on first batch
         if (!_tableVerified)
@@ -343,7 +359,6 @@ public sealed class SnowflakeSinkTask : SinkTask
             var sql = $@"
 MERGE INTO {QuoteIdentifier(_table)} AS target
 USING (SELECT {sourceValues}) AS source
-using Kuestenlogik.Surgewave.Connect;
 ON {string.Join(" AND ", keyConditions)}
 WHEN MATCHED THEN UPDATE SET {string.Join(", ", columnAssignments)}
 WHEN NOT MATCHED THEN INSERT ({columnList}) VALUES ({string.Join(", ", columns.Select(c => $"source.{QuoteIdentifier(c)}"))})";

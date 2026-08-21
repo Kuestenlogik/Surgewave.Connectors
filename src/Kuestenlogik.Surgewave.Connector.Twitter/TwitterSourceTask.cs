@@ -29,6 +29,7 @@ public sealed class TwitterSourceTask : SourceTask
     private long _messageId;
     private DateTimeOffset _lastPollTime = DateTimeOffset.UtcNow;
     private string? _sinceId;
+    private readonly Dictionary<string, string> _userSinceIds = new(StringComparer.Ordinal);
 
     public override string Version => "1.0.0";
 
@@ -111,6 +112,10 @@ public sealed class TwitterSourceTask : SourceTask
                 foreach (var userId in _userIds)
                 {
                     var url = $"users/{userId}/tweets?max_results={_maxResults}&tweet.fields=created_at,author_id,in_reply_to_user_id,public_metrics";
+                    if (_userSinceIds.TryGetValue(userId, out var userSinceId))
+                    {
+                        url += $"&since_id={userSinceId}";
+                    }
 
                     var response = await _httpClient.GetAsync(new Uri(url, UriKind.Relative), cancellationToken);
                     if (!response.IsSuccessStatusCode) continue;
@@ -128,6 +133,12 @@ public sealed class TwitterSourceTask : SourceTask
                                 continue;
 
                             records.Add(CreateSourceRecord(tweet));
+                            if (tweet.Id != null &&
+                                (!_userSinceIds.TryGetValue(userId, out var newest) ||
+                                 string.Compare(tweet.Id, newest, StringComparison.Ordinal) > 0))
+                            {
+                                _userSinceIds[userId] = tweet.Id;
+                            }
                         }
                     }
                 }
@@ -136,9 +147,10 @@ public sealed class TwitterSourceTask : SourceTask
         catch (OperationCanceledException)
         {
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Rate limit or API error
+            // Rate limit or API error: surface it instead of polling silently forever
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;

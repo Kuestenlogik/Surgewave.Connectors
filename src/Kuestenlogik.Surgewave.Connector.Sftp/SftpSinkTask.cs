@@ -125,11 +125,14 @@ public sealed class SftpSinkTask : SinkTask
             {
                 // Skip invalid JSON records
             }
-            catch (Renci.SshNet.Common.SshException)
+            catch (Renci.SshNet.Common.SshException ex)
             {
-                // Connection issue - will retry on next batch
+                // Drop the connection so the retried batch reconnects; rethrowing keeps
+                // the framework from committing offsets for records never uploaded
                 _client?.Dispose();
                 _client = null;
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
 

@@ -23,8 +23,12 @@ public sealed class RedisSourceTask : SourceTask
     private int _batchMaxRecords = RedisConnectorConfig.DefaultBatchMaxRecords;
     private DateTimeOffset _lastPollTime = DateTimeOffset.MinValue;
 
-    // Track stream offsets per stream
+    // Track the XREADGROUP position per stream: "0" replays this consumer's pending
+    // entries, ">" reads new messages (a concrete id never delivers new messages)
     private readonly Dictionary<string, string> _streamOffsets = new();
+
+    // Entry ids delivered to the broker but not yet acknowledged, per stream
+    private readonly Dictionary<string, List<RedisValue>> _pendingAcks = new();
     private readonly Dictionary<string, object> _sourcePartition = new();
 
     // Pub/Sub message buffer
@@ -56,9 +60,9 @@ public sealed class RedisSourceTask : SourceTask
             _sourcePartition["streams"] = string.Join(",", _streams);
             _sourcePartition["consumer_group"] = _consumerGroup;
 
-            // Initialize consumer groups and restore offsets
+            // Initialize consumer groups and stream read positions
             InitializeConsumerGroups();
-            RestoreOffsets();
+            InitializeStreamPositions();
         }
         else // pubsub
         {
@@ -98,29 +102,15 @@ public sealed class RedisSourceTask : SourceTask
         }
     }
 
-    private void RestoreOffsets()
+    private void InitializeStreamPositions()
     {
-        var storedOffset = Context.OffsetStorageReader?.Offset(_sourcePartition);
-        if (storedOffset != null)
+        // The consumer group tracks the last-delivered id server-side, so there is no
+        // offset to restore. Start at "0" to replay entries that were delivered to this
+        // consumer but never acknowledged (e.g. before a crash); polling switches to
+        // ">" once that backlog is drained.
+        foreach (var stream in _streams)
         {
-            foreach (var stream in _streams)
-            {
-                if (storedOffset.TryGetValue($"stream:{stream}", out var offset))
-                {
-                    _streamOffsets[stream] = offset?.ToString() ?? ">";
-                }
-                else
-                {
-                    _streamOffsets[stream] = ">"; // Read pending + new messages
-                }
-            }
-        }
-        else
-        {
-            foreach (var stream in _streams)
-            {
-                _streamOffsets[stream] = ">"; // Start from pending messages
-            }
+            _streamOffsets[stream] = "0";
         }
     }
 
@@ -179,16 +169,29 @@ public sealed class RedisSourceTask : SourceTask
                 position,
                 _batchMaxRecords - records.Count);
 
-            if (entries.Length > 0)
+            if (position != ">")
             {
-                foreach (var entry in entries)
+                if (entries.Length == 0)
                 {
-                    var record = CreateSourceRecord(stream, entry);
-                    records.Add(record);
-
-                    // Update offset
-                    _streamOffsets[stream] = entry.Id.ToString();
+                    // Pending backlog drained - switch to new messages
+                    _streamOffsets[stream] = ">";
+                    entries = await _db.StreamReadGroupAsync(
+                        stream,
+                        _consumerGroup,
+                        _consumerName,
+                        ">",
+                        _batchMaxRecords - records.Count);
                 }
+                else
+                {
+                    // Still replaying the pending backlog - continue after the last replayed id
+                    _streamOffsets[stream] = entries[^1].Id.ToString();
+                }
+            }
+
+            foreach (var entry in entries)
+            {
+                records.Add(CreateSourceRecord(stream, entry));
             }
 
             if (records.Count >= _batchMaxRecords)
@@ -207,11 +210,10 @@ public sealed class RedisSourceTask : SourceTask
             data[value.Name.ToString()] = value.Value.ToString();
         }
 
-        var sourceOffset = new Dictionary<string, object>();
-        foreach (var (stream, offset) in _streamOffsets)
+        var sourceOffset = new Dictionary<string, object>
         {
-            sourceOffset[$"stream:{stream}"] = offset;
-        }
+            [$"stream:{streamName}"] = entry.Id.ToString()
+        };
 
         return new SourceRecord
         {
@@ -269,24 +271,42 @@ public sealed class RedisSourceTask : SourceTask
         }
     }
 
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (record.Headers != null
+            && record.Headers.TryGetValue("redis.stream", out var streamBytes)
+            && record.Headers.TryGetValue("redis.id", out var idBytes))
+        {
+            var stream = Encoding.UTF8.GetString(streamBytes);
+            if (!_pendingAcks.TryGetValue(stream, out var ids))
+            {
+                ids = [];
+                _pendingAcks[stream] = ids;
+            }
+            ids.Add(Encoding.UTF8.GetString(idBytes));
+        }
+    }
+
     public override async Task CommitAsync(CancellationToken cancellationToken)
     {
         if (_mode != RedisConnectorConfig.ModeStream || _db == null)
             return;
 
-        // Acknowledge processed messages
-        foreach (var (stream, lastId) in _streamOffsets)
+        // XACK is per-id, not cumulative: every committed entry must be acknowledged
+        foreach (var (stream, ids) in _pendingAcks)
         {
-            if (lastId != ">")
+            if (ids.Count == 0)
+                continue;
+
+            try
             {
-                try
-                {
-                    await _db.StreamAcknowledgeAsync(stream, _consumerGroup, lastId);
-                }
-                catch (RedisException)
-                {
-                    // Log but don't fail - might be already acknowledged
-                }
+                await _db.StreamAcknowledgeAsync(stream, _consumerGroup, ids.ToArray());
+                ids.Clear();
+            }
+            catch (RedisException ex)
+            {
+                // Keep the ids so the next commit retries the acknowledgement
+                Context.RaiseError?.Invoke(ex);
             }
         }
     }

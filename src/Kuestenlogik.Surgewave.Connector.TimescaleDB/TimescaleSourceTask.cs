@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Npgsql;
@@ -25,6 +26,7 @@ public sealed class TimescaleSourceTask : SourceTask
     private DateTime _lastTimestamp;
     private long _messageId;
     private bool _initialized;
+    private Dictionary<string, object> _sourcePartition = null!;
 
     public override string Version => "1.0.0";
 
@@ -34,6 +36,11 @@ public sealed class TimescaleSourceTask : SourceTask
         _query = config.GetValueOrDefault(TimescaleConnectorConfig.Query, null);
         _table = config.GetValueOrDefault(TimescaleConnectorConfig.Table, null);
         _timeColumn = config.GetValueOrDefault(TimescaleConnectorConfig.TimeColumn, "time")!;
+        _sourcePartition = new Dictionary<string, object>
+        {
+            ["source"] = "timescale",
+            ["table"] = _table ?? "query"
+        };
 
         _pollIntervalMs = int.Parse(config.GetValueOrDefault(TimescaleConnectorConfig.PollIntervalMs,
             TimescaleConnectorConfig.DefaultPollIntervalMs.ToString())!);
@@ -92,10 +99,20 @@ public sealed class TimescaleSourceTask : SourceTask
 
         _lastPoll = DateTime.UtcNow;
 
-        // Initialize start timestamp on first poll
+        // Initialize start timestamp on first poll: resume from the stored offset,
+        // fall back to the lookback window for a fresh connector.
         if (!_initialized)
         {
             _lastTimestamp = DateTime.UtcNow.AddSeconds(-_lookbackSeconds);
+
+            var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+            if (storedOffset != null &&
+                storedOffset.TryGetValue("last_time", out var lastTime) &&
+                DateTime.TryParse(lastTime?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var stored))
+            {
+                _lastTimestamp = stored;
+            }
+
             _initialized = true;
         }
 
@@ -114,10 +131,7 @@ public sealed class TimescaleSourceTask : SourceTask
 
             while (await reader.ReadAsync(cancellationToken))
             {
-                var record = CreateRecord(reader);
-                records.Add(record);
-
-                // Update last timestamp
+                // Advance the cursor first so the record's offset covers its own row
                 var timeOrdinal = reader.GetOrdinal(_timeColumn);
                 if (!reader.IsDBNull(timeOrdinal))
                 {
@@ -127,11 +141,15 @@ public sealed class TimescaleSourceTask : SourceTask
                         _lastTimestamp = rowTime;
                     }
                 }
+
+                var record = CreateRecord(reader);
+                records.Add(record);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the error; the rows read so far are still returned
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -229,11 +247,7 @@ public sealed class TimescaleSourceTask : SourceTask
 
         return new SourceRecord
         {
-            SourcePartition = new Dictionary<string, object>
-            {
-                ["source"] = "timescale",
-                ["table"] = _table ?? "query"
-            },
+            SourcePartition = _sourcePartition,
             SourceOffset = new Dictionary<string, object>
             {
                 ["message_id"] = msgId,

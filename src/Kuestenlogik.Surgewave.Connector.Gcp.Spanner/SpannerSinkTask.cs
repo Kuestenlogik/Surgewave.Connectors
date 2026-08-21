@@ -96,17 +96,18 @@ public sealed class SpannerSinkTask : SinkTask
                 {
                     batch.Add(row);
                 }
-
-                // Flush batch if full
-                if (batch.Count >= _batchSize)
-                {
-                    await FlushBatchAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
             }
-            catch (Exception)
+            catch (JsonException ex)
             {
-                // Log and continue
+                Context?.RaiseError?.Invoke(ex);
+                throw;
+            }
+
+            // Flush batch if full
+            if (batch.Count >= _batchSize)
+            {
+                await FlushBatchAsync(batch, cancellationToken);
+                batch.Clear();
             }
         }
 
@@ -155,9 +156,10 @@ public sealed class SpannerSinkTask : SinkTask
 
             await transaction.CommitAsync(ct);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
         finally
         {

@@ -60,9 +60,12 @@ public sealed class NeptuneSinkTask : SinkTask
                     await WriteVertexAsync(data);
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Rethrow so the worker retries and eventually routes to the DLQ
+                // instead of committing offsets for records that were never written.
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }
@@ -73,7 +76,7 @@ public sealed class NeptuneSinkTask : SinkTask
         var id = idObj?.ToString() ?? Guid.NewGuid().ToString();
         var properties = BuildProperties(data, _idField);
 
-        var query = $"g.addV('{_vertexLabel}').property('id', '{id}'){properties}";
+        var query = $"g.addV('{EscapeGremlin(_vertexLabel)}').property('id', '{EscapeGremlin(id)}'){properties}";
         await _client!.SubmitAsync<dynamic>(query);
     }
 
@@ -89,7 +92,7 @@ public sealed class NeptuneSinkTask : SinkTask
 
         var properties = BuildProperties(data, _idField, _fromField, _toField);
 
-        var query = $"g.V('{fromId}').addE('{_edgeLabel}').to(g.V('{toId}')){properties}";
+        var query = $"g.V('{EscapeGremlin(fromId)}').addE('{EscapeGremlin(_edgeLabel)}').to(g.V('{EscapeGremlin(toId)}')){properties}";
         await _client!.SubmitAsync<dynamic>(query);
     }
 
@@ -102,12 +105,19 @@ public sealed class NeptuneSinkTask : SinkTask
         {
             if (exclude.Contains(key) || value == null) continue;
 
-            var escapedValue = value.ToString()?.Replace("'", "\\'") ?? "";
-            sb.Append($".property('{key}', '{escapedValue}')");
+            var escapedValue = EscapeGremlin(value.ToString() ?? "");
+            sb.Append($".property('{EscapeGremlin(key)}', '{escapedValue}')");
         }
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Escapes a value for embedding in a single-quoted Gremlin string literal.
+    /// Backslashes first, then quotes, so no new escape sequences are introduced.
+    /// </summary>
+    private static string EscapeGremlin(string value)
+        => value.Replace("\\", "\\\\").Replace("'", "\\'");
 
     public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
     {

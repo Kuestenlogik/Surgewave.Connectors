@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
@@ -40,6 +41,15 @@ public sealed class MySqlCdcSourceTask : SourceTask
     private long _currentBinlogPosition = 0;
     private bool _snapshotCompleted;
     private TableMapEvent? _currentTableMap;
+    private Task<bool>? _pendingMoveNext;
+
+    private MySqlConnection? _snapshotConnection;
+    private MySqlCommand? _snapshotCommand;
+    private DbDataReader? _snapshotReader;
+    private List<string> _snapshotColumns = [];
+    private int _snapshotTableIndex;
+    private string _snapshotDatabase = "";
+    private string _snapshotTableName = "";
 
     private readonly Dictionary<string, object> _sourcePartition = new();
     private readonly Dictionary<long, TableMapEvent> _tableMapCache = new();
@@ -109,8 +119,10 @@ public sealed class MySqlCdcSourceTask : SourceTask
         _eventEnumerator?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _binlogClient = null;
         _eventEnumerator = null;
+        _pendingMoveNext = null;
         _binlogCts?.Dispose();
         _binlogCts = null;
+        CloseSnapshotAsync().GetAwaiter().GetResult();
     }
 
     protected override void Dispose(bool disposing)
@@ -127,13 +139,16 @@ public sealed class MySqlCdcSourceTask : SourceTask
         // Check if we need to do initial snapshot
         if (_snapshotMode != MySqlConnectorConfig.SnapshotModeNever && !_snapshotCompleted)
         {
-            if (_snapshotMode != MySqlConnectorConfig.SnapshotModeSchemaOnly)
+            if (_snapshotMode == MySqlConnectorConfig.SnapshotModeSchemaOnly)
+            {
+                _snapshotCompleted = true;
+            }
+            else
             {
                 var snapshotRecords = await PerformSnapshotAsync(cancellationToken);
                 if (snapshotRecords.Count > 0)
                     return snapshotRecords;
             }
-            _snapshotCompleted = true;
         }
 
         // Start binlog replication if not started
@@ -147,26 +162,35 @@ public sealed class MySqlCdcSourceTask : SourceTask
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(_pollIntervalMs));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
-        try
+        while (records.Count < _batchMaxRecords)
         {
-            while (records.Count < _batchMaxRecords)
+            if (_eventEnumerator == null)
+                break;
+
+            // Resume a MoveNextAsync left pending by an earlier poll timeout so its event is not lost.
+            var moveNext = _pendingMoveNext ?? _eventEnumerator.MoveNextAsync().AsTask();
+            _pendingMoveNext = null;
+
+            bool hasNext;
+            try
             {
-                if (_eventEnumerator == null)
-                    break;
-
-                var hasNext = await _eventEnumerator.MoveNextAsync();
-                if (!hasNext)
-                    break;
-
-                var (header, binlogEvent) = _eventEnumerator.Current;
-                _currentBinlogPosition = header.NextEventPosition;
-                var eventRecords = ProcessBinlogEvent(binlogEvent);
-                records.AddRange(eventRecords);
+                hasNext = await moveNext.WaitAsync(linkedCts.Token);
             }
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-        {
-            // Timeout - return what we have
+            catch (OperationCanceledException)
+            {
+                _pendingMoveNext = moveNext;
+                if (timeoutCts.IsCancellationRequested)
+                    break; // Timeout - return what we have
+                throw;
+            }
+
+            if (!hasNext)
+                break;
+
+            var (header, binlogEvent) = _eventEnumerator.Current;
+            _currentBinlogPosition = header.NextEventPosition;
+            var eventRecords = ProcessBinlogEvent(binlogEvent);
+            records.AddRange(eventRecords);
         }
 
         return records;
@@ -176,32 +200,57 @@ public sealed class MySqlCdcSourceTask : SourceTask
     {
         var records = new List<SourceRecord>();
 
-        var connectionString = BuildConnectionString();
-        await using var conn = new MySqlConnection(connectionString);
-        await conn.OpenAsync(cancellationToken);
-
-        foreach (var table in _tables)
+        try
         {
-            var (database, tableName) = ParseTableName(table);
-            var targetDatabase = string.IsNullOrEmpty(database) ? _database : database;
-
-#pragma warning disable CA2100 // SQL injection - table names validated
-            await using var cmd = new MySqlCommand($"SELECT * FROM `{targetDatabase}`.`{tableName}`", conn);
-#pragma warning restore CA2100
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-
-            var columns = new List<string>();
-            for (var i = 0; i < reader.FieldCount; i++)
+            if (_snapshotConnection == null)
             {
-                columns.Add(reader.GetName(i));
+                _snapshotConnection = new MySqlConnection(BuildConnectionString());
+                await _snapshotConnection.OpenAsync(cancellationToken);
             }
 
-            while (await reader.ReadAsync(cancellationToken))
+            // The reader is kept open across polls so the snapshot resumes where the
+            // previous batch stopped instead of re-reading each table from the start.
+            while (records.Count < _batchMaxRecords)
             {
-                var row = new Dictionary<string, object?>();
-                for (var i = 0; i < reader.FieldCount; i++)
+                if (_snapshotReader == null)
                 {
-                    row[columns[i]] = reader.IsDBNull(i) ? null : ConvertValue(reader.GetValue(i));
+                    if (_snapshotTableIndex >= _tables.Length)
+                    {
+                        await CloseSnapshotAsync();
+                        _snapshotCompleted = true;
+                        break;
+                    }
+
+                    var (database, tableName) = ParseTableName(_tables[_snapshotTableIndex]);
+                    _snapshotDatabase = string.IsNullOrEmpty(database) ? _database : database;
+                    _snapshotTableName = tableName;
+
+#pragma warning disable CA2100 // SQL injection - table names validated
+                    _snapshotCommand = new MySqlCommand($"SELECT * FROM `{_snapshotDatabase}`.`{_snapshotTableName}`", _snapshotConnection);
+#pragma warning restore CA2100
+                    _snapshotReader = await _snapshotCommand.ExecuteReaderAsync(cancellationToken);
+
+                    _snapshotColumns = [];
+                    for (var i = 0; i < _snapshotReader.FieldCount; i++)
+                    {
+                        _snapshotColumns.Add(_snapshotReader.GetName(i));
+                    }
+                }
+
+                if (!await _snapshotReader.ReadAsync(cancellationToken))
+                {
+                    await _snapshotReader.DisposeAsync();
+                    _snapshotReader = null;
+                    await _snapshotCommand!.DisposeAsync();
+                    _snapshotCommand = null;
+                    _snapshotTableIndex++;
+                    continue;
+                }
+
+                var row = new Dictionary<string, object?>();
+                for (var i = 0; i < _snapshotReader.FieldCount; i++)
+                {
+                    row[_snapshotColumns[i]] = _snapshotReader.IsDBNull(i) ? null : ConvertValue(_snapshotReader.GetValue(i));
                 }
 
                 var payload = new Dictionary<string, object?>
@@ -209,8 +258,8 @@ public sealed class MySqlCdcSourceTask : SourceTask
                     ["op"] = "r", // read/snapshot
                     ["source"] = new Dictionary<string, object>
                     {
-                        ["database"] = targetDatabase,
-                        ["table"] = tableName,
+                        ["database"] = _snapshotDatabase,
+                        ["table"] = _snapshotTableName,
                         ["snapshot"] = true,
                         ["server"] = $"{_host}:{_port}"
                     },
@@ -228,24 +277,48 @@ public sealed class MySqlCdcSourceTask : SourceTask
                         [MySqlConnectorConfig.OffsetBinlogPosition] = _currentBinlogPosition,
                         [MySqlConnectorConfig.OffsetSnapshotCompleted] = "false"
                     },
-                    Topic = GetTopicName(targetDatabase, tableName),
+                    Topic = GetTopicName(_snapshotDatabase, _snapshotTableName),
                     Key = GetPrimaryKeyBytes(row),
                     Value = JsonSerializer.SerializeToUtf8Bytes(payload),
                     Timestamp = DateTimeOffset.UtcNow,
                     Headers = new Dictionary<string, byte[]>
                     {
-                        ["mysql.database"] = Encoding.UTF8.GetBytes(targetDatabase),
-                        ["mysql.table"] = Encoding.UTF8.GetBytes(tableName),
+                        ["mysql.database"] = Encoding.UTF8.GetBytes(_snapshotDatabase),
+                        ["mysql.table"] = Encoding.UTF8.GetBytes(_snapshotTableName),
                         ["mysql.op"] = Encoding.UTF8.GetBytes("r")
                     }
                 });
-
-                if (records.Count >= _batchMaxRecords)
-                    return records;
             }
+        }
+        catch
+        {
+            // A broken reader cannot resume; restart the current table on the next poll.
+            await CloseSnapshotAsync();
+            throw;
         }
 
         return records;
+    }
+
+    private async Task CloseSnapshotAsync()
+    {
+        if (_snapshotReader != null)
+        {
+            await _snapshotReader.DisposeAsync();
+            _snapshotReader = null;
+        }
+
+        if (_snapshotCommand != null)
+        {
+            await _snapshotCommand.DisposeAsync();
+            _snapshotCommand = null;
+        }
+
+        if (_snapshotConnection != null)
+        {
+            await _snapshotConnection.DisposeAsync();
+            _snapshotConnection = null;
+        }
     }
 
     private async Task StartBinlogReplicationAsync(CancellationToken cancellationToken)
@@ -306,7 +379,6 @@ public sealed class MySqlCdcSourceTask : SourceTask
                         records.AddRange(CreateInsertRecords(writeRows, tableMap));
                     }
                 }
-                UpdatePosition(binlogEvent);
                 break;
 
             case UpdateRowsEvent updateRows:
@@ -318,7 +390,6 @@ public sealed class MySqlCdcSourceTask : SourceTask
                         records.AddRange(CreateUpdateRecords(updateRows, tableMap));
                     }
                 }
-                UpdatePosition(binlogEvent);
                 break;
 
             case DeleteRowsEvent deleteRows:
@@ -330,30 +401,15 @@ public sealed class MySqlCdcSourceTask : SourceTask
                         records.AddRange(CreateDeleteRecords(deleteRows, tableMap));
                     }
                 }
-                UpdatePosition(binlogEvent);
                 break;
 
             case RotateEvent rotate:
                 _currentBinlogFilename = rotate.BinlogFilename;
                 _currentBinlogPosition = rotate.BinlogPosition;
                 break;
-
-            default:
-                UpdatePosition(binlogEvent);
-                break;
         }
 
         return records;
-    }
-
-    private void UpdatePosition(IBinlogEvent binlogEvent)
-    {
-        // Position is updated at the end of each event
-        if (binlogEvent is not RotateEvent)
-        {
-            // The next position is the current position + event length
-            // Note: This depends on the MySqlCdc library exposing header info
-        }
     }
 
     private TableMapEvent? GetTableMap(long tableId)

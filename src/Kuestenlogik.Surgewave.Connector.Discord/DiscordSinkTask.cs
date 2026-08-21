@@ -38,12 +38,13 @@ public sealed class DiscordSinkTask : SinkTask
         _client = new DiscordSocketClient(socketConfig);
         _client.Ready += () => { _readyTcs.TrySetResult(); return Task.CompletedTask; };
 
-        // Start connection and wait for ready
+        // Start connection and wait for ready. Ready never fires for an invalid
+        // token, so the wait must be bounded or startup hangs forever.
         Task.Run(async () =>
         {
             await _client.LoginAsync(TokenType.Bot, token);
             await _client.StartAsync();
-            await _readyTcs.Task;
+            await _readyTcs.Task.WaitAsync(TimeSpan.FromSeconds(60));
         }).GetAwaiter().GetResult();
     }
 
@@ -62,7 +63,13 @@ public sealed class DiscordSinkTask : SinkTask
             }
 
             var channel = _client!.GetChannel(channelId) as IMessageChannel;
-            if (channel == null) continue;
+            if (channel == null)
+            {
+                var ex = new InvalidOperationException(
+                    $"Discord channel {channelId} could not be resolved to a message channel.");
+                Context.RaiseError?.Invoke(ex);
+                throw ex;
+            }
 
             var content = Encoding.UTF8.GetString(record.Value);
 

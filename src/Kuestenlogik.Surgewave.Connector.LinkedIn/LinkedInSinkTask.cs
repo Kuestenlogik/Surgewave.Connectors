@@ -76,29 +76,34 @@ public sealed class LinkedInSinkTask : SinkTask
                     continue; // No author specified
                 }
 
-                var payload = new
+                // The ugcPosts wire format requires dotted union keys, which anonymous
+                // types cannot express - dictionary keys bypass the naming policy.
+                var payload = new Dictionary<string, object>
                 {
-                    author = authorUrn,
-                    lifecycleState = "PUBLISHED",
-                    specificContent = new
+                    ["author"] = authorUrn,
+                    ["lifecycleState"] = "PUBLISHED",
+                    ["specificContent"] = new Dictionary<string, object>
                     {
-                        comLinkedinUgcShareContent = new
+                        ["com.linkedin.ugc.ShareContent"] = new
                         {
                             shareCommentary = new { text },
                             shareMediaCategory = "NONE"
                         }
                     },
-                    visibility = new
+                    ["visibility"] = new Dictionary<string, object>
                     {
-                        comLinkedinUgcMemberNetworkVisibility = _defaultVisibility
+                        ["com.linkedin.ugc.MemberNetworkVisibility"] = _defaultVisibility
                     }
                 };
 
                 using var content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
                 using var response = await _httpClient.PostAsync(new Uri("/v2/ugcPosts", UriKind.Relative), content, cancellationToken);
+                response.EnsureSuccessStatusCode();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

@@ -34,6 +34,11 @@ public sealed class ODataSourceTask : SourceTask
     private object? _lastIncrementalValue;
     private string? _deltaLink;
     private long _messageId;
+    private string? _oauthTokenUrl;
+    private string? _oauthClientId;
+    private string? _oauthClientSecret;
+    private string? _accessToken;
+    private DateTime _tokenExpiry = DateTime.MinValue;
 
     public override string Version => "1.0.0";
 
@@ -65,6 +70,13 @@ public sealed class ODataSourceTask : SourceTask
         _useDelta = config.GetValueOrDefault(ODataConnectorConfig.DeltaLink, "false") == "true";
 
         _httpClient = CreateHttpClient(config);
+
+        if (_useDelta)
+        {
+            // OData change tracking: the service only emits a delta link when asked to.
+            _httpClient.DefaultRequestHeaders.Add("Prefer", "odata.track-changes");
+        }
+
         var settings = new ODataClientSettings(_httpClient);
         _client = new ODataClient(settings);
     }
@@ -101,8 +113,15 @@ public sealed class ODataSourceTask : SourceTask
                 break;
 
             case "oauth":
-                // OAuth token would be fetched asynchronously
-                // For simplicity, assume token is pre-configured or fetch synchronously
+                _oauthTokenUrl = config.GetValueOrDefault(ODataConnectorConfig.OAuthTokenUrl, "")!;
+                _oauthClientId = config.GetValueOrDefault(ODataConnectorConfig.OAuthClientId, "")!;
+                _oauthClientSecret = config.GetValueOrDefault(ODataConnectorConfig.OAuthClientSecret, "")!;
+                if (string.IsNullOrWhiteSpace(_oauthTokenUrl) || string.IsNullOrWhiteSpace(_oauthClientId))
+                {
+                    throw new ArgumentException(
+                        $"'{ODataConnectorConfig.OAuthTokenUrl}' and '{ODataConnectorConfig.OAuthClientId}' are required for oauth authentication");
+                }
+                // The bearer token is fetched per poll (and refreshed on expiry) in EnsureAccessTokenAsync.
                 break;
         }
 
@@ -125,40 +144,71 @@ public sealed class ODataSourceTask : SourceTask
 
         try
         {
-            var command = _client!.For(_entitySet);
-
-            // Apply select
-            if (_selectFields != null && _selectFields.Length > 0)
+            if (_oauthTokenUrl != null)
             {
-                command = command.Select(_selectFields);
+                await EnsureAccessTokenAsync(cancellationToken);
             }
 
-            // Apply expand
-            if (_expandProperties != null)
+            IEnumerable<IDictionary<string, object>> entities;
+            var annotations = _useDelta ? new ODataFeedAnnotations() : null;
+
+            if (annotations != null && _deltaLink != null)
             {
-                foreach (var expand in _expandProperties)
+                // A delta link replays only the changes since the previous poll.
+                // Delta responses may be paged; the fresh link arrives on the last page.
+                var changes = new List<IDictionary<string, object>>(
+                    await _client!.FindEntriesAsync(_deltaLink, annotations, cancellationToken));
+                while (annotations.NextPageLink != null)
                 {
-                    command = command.Expand(expand);
+                    changes.AddRange(await _client.FindEntriesAsync(
+                        annotations.NextPageLink.AbsoluteUri, annotations, cancellationToken));
                 }
+                entities = changes;
             }
-
-            // Apply filter
-            var filter = BuildFilter();
-            if (!string.IsNullOrEmpty(filter))
+            else
             {
-                command = command.Filter(filter);
+                var command = _client!.For(_entitySet);
+
+                // Apply select
+                if (_selectFields != null && _selectFields.Length > 0)
+                {
+                    command = command.Select(_selectFields);
+                }
+
+                // Apply expand
+                if (_expandProperties != null)
+                {
+                    foreach (var expand in _expandProperties)
+                    {
+                        command = command.Expand(expand);
+                    }
+                }
+
+                // Apply filter
+                var filter = BuildFilter();
+                if (!string.IsNullOrEmpty(filter))
+                {
+                    command = command.Filter(filter);
+                }
+
+                // Apply order
+                if (!string.IsNullOrEmpty(_orderBy))
+                {
+                    command = command.OrderBy(_orderBy);
+                }
+
+                // Apply top
+                command = command.Top(_top);
+
+                entities = annotations != null
+                    ? await command.FindEntriesAsync(annotations, cancellationToken)
+                    : await command.FindEntriesAsync(cancellationToken);
             }
 
-            // Apply order
-            if (!string.IsNullOrEmpty(_orderBy))
+            if (annotations?.DeltaLink != null)
             {
-                command = command.OrderBy(_orderBy);
+                _deltaLink = annotations.DeltaLink.AbsoluteUri;
             }
-
-            // Apply top
-            command = command.Top(_top);
-
-            var entities = await command.FindEntriesAsync(cancellationToken);
 
             foreach (var entity in entities)
             {
@@ -172,12 +222,43 @@ public sealed class ODataSourceTask : SourceTask
                 }
             }
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Log and continue
+            // Drop a possibly expired delta link so the next poll can fall back to
+            // the full query, and surface the failure instead of hiding it.
+            _deltaLink = null;
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
+    }
+
+    private async Task EnsureAccessTokenAsync(CancellationToken ct)
+    {
+        if (_accessToken != null && DateTime.UtcNow < _tokenExpiry)
+        {
+            return;
+        }
+
+        var request = new HttpRequestMessage(HttpMethod.Post, _oauthTokenUrl);
+        request.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "client_credentials",
+            ["client_id"] = _oauthClientId!,
+            ["client_secret"] = _oauthClientSecret!
+        });
+
+        var response = await _httpClient!.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var content = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(content);
+
+        _accessToken = doc.RootElement.GetProperty("access_token").GetString();
+        var expiresIn = doc.RootElement.TryGetProperty("expires_in", out var expiry) ? expiry.GetInt32() : 3600;
+        _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
+
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
     }
 
     private string? BuildFilter()

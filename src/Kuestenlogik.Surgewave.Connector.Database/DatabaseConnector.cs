@@ -15,6 +15,63 @@ internal static class DictionaryExtensions
 }
 
 /// <summary>
+/// Resolves <see cref="DbProviderFactory"/> instances for the supported providers.
+/// The .NET factory registry starts empty, so unregistered providers are resolved by
+/// loading the well-known factory type from the provider assembly deployed with the
+/// plugin, then registering it for subsequent lookups.
+/// </summary>
+internal static class DbConnectionFactory
+{
+    private static readonly Dictionary<string, (string InvariantName, string[] FactoryTypeNames)> KnownProviders =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SqlClient"] = ("Microsoft.Data.SqlClient", ["Microsoft.Data.SqlClient.SqlClientFactory, Microsoft.Data.SqlClient"]),
+            ["Npgsql"] = ("Npgsql", ["Npgsql.NpgsqlFactory, Npgsql"]),
+            ["MySql"] = ("MySql.Data.MySqlClient",
+            [
+                "MySqlConnector.MySqlConnectorFactory, MySqlConnector",
+                "MySql.Data.MySqlClient.MySqlClientFactory, MySql.Data"
+            ]),
+            ["Sqlite"] = ("Microsoft.Data.Sqlite", ["Microsoft.Data.Sqlite.SqliteFactory, Microsoft.Data.Sqlite"])
+        };
+
+    public static DbConnection Create(string provider, string connectionString)
+    {
+        var factory = ResolveFactory(provider);
+        var connection = factory.CreateConnection()
+            ?? throw new InvalidOperationException($"Failed to create connection for provider: {provider}");
+        connection.ConnectionString = connectionString;
+        return connection;
+    }
+
+    private static DbProviderFactory ResolveFactory(string provider)
+    {
+        var invariantName = KnownProviders.TryGetValue(provider, out var known) ? known.InvariantName : provider;
+        if (DbProviderFactories.TryGetFactory(invariantName, out var registered))
+        {
+            return registered;
+        }
+
+        foreach (var typeName in known.FactoryTypeNames ?? [])
+        {
+            var factoryType = Type.GetType(typeName, throwOnError: false);
+            var instance = factoryType?.GetField("Instance")?.GetValue(null)
+                ?? factoryType?.GetProperty("Instance")?.GetValue(null);
+            if (instance is DbProviderFactory factory)
+            {
+                DbProviderFactories.RegisterFactory(invariantName, factory);
+                return factory;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Database provider '{provider}' is not available. Deploy the provider assembly " +
+            $"(e.g. {invariantName}) alongside the connector, or call " +
+            $"DbProviderFactories.RegisterFactory(\"{invariantName}\", ...) before starting the connector.");
+    }
+}
+
+/// <summary>
 /// A source connector that reads data from a database using JDBC-style polling.
 /// Supports incremental queries using a timestamp or incrementing column.
 /// </summary>
@@ -104,9 +161,7 @@ public sealed class DatabaseSourceTask : SourceTask
     private int _batchMaxRows = 1000;
     private DbConnection? _connection;
     private DateTimeOffset _lastPollTime = DateTimeOffset.MinValue;
-    private readonly Dictionary<string, object> _sourcePartition = new();
-    private long _lastIncrementingValue;
-    private DateTimeOffset _lastTimestampValue = DateTimeOffset.MinValue;
+    private readonly List<TableQueryState> _tableStates = new();
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -121,54 +176,55 @@ public sealed class DatabaseSourceTask : SourceTask
         _pollIntervalMs = long.Parse(config.GetOrDefault(PollIntervalMsConfig, "5000"));
         _batchMaxRows = int.Parse(config.GetOrDefault(BatchMaxRowsConfig, "1000"));
 
-        _sourcePartition["connection"] = _connectionString.GetHashCode().ToString();
-        _sourcePartition["query"] = string.IsNullOrEmpty(_query) ? _tableWhitelist : _query;
+        // One state (source partition + watermarks) per table, so every whitelisted
+        // table is polled and tracked independently
+        var connectionKey = _connectionString.GetHashCode().ToString();
+        if (!string.IsNullOrEmpty(_query))
+        {
+            _tableStates.Add(CreateTableState(connectionKey, ""));
+        }
+        else
+        {
+            foreach (var table in _tableWhitelist.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                _tableStates.Add(CreateTableState(connectionKey, table));
+            }
+        }
+
+        _connection = DbConnectionFactory.Create(_provider, _connectionString);
+        _connection.Open();
+    }
+
+    private TableQueryState CreateTableState(string connectionKey, string table)
+    {
+        var sourcePartition = new Dictionary<string, object>
+        {
+            ["connection"] = connectionKey,
+            ["query"] = string.IsNullOrEmpty(_query) ? table : _query
+        };
+
+        var state = new TableQueryState
+        {
+            SourcePartition = sourcePartition,
+            Topic = BuildTopic(table),
+            Table = table
+        };
 
         // Restore offset
-        var storedOffset = Context.OffsetStorageReader?.Offset(_sourcePartition);
+        var storedOffset = Context.OffsetStorageReader?.Offset(sourcePartition);
         if (storedOffset != null)
         {
             if (storedOffset.TryGetValue(LastOffsetField, out var lastOffset))
             {
-                _lastIncrementingValue = Convert.ToInt64(lastOffset);
+                state.LastIncrementingValue = Convert.ToInt64(lastOffset);
             }
             if (storedOffset.TryGetValue(LastTimestampField, out var lastTs))
             {
-                _lastTimestampValue = DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(lastTs));
+                state.LastTimestampValue = DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(lastTs));
             }
         }
 
-        // Create database connection using DbProviderFactories
-        _connection = CreateConnection(_provider, _connectionString);
-        _connection.Open();
-    }
-
-    private static DbConnection CreateConnection(string provider, string connectionString)
-    {
-        // Use DbProviderFactories if available, otherwise return null and handle in PollAsync
-        // This requires the appropriate provider package to be installed
-        try
-        {
-            var factory = DbProviderFactories.GetFactory(provider switch
-            {
-                "SqlClient" => "Microsoft.Data.SqlClient",
-                "Npgsql" => "Npgsql",
-                "MySql" => "MySql.Data.MySqlClient",
-                "Sqlite" => "Microsoft.Data.Sqlite",
-                _ => provider
-            });
-            var connection = factory.CreateConnection()
-                ?? throw new InvalidOperationException($"Failed to create connection for provider: {provider}");
-            connection.ConnectionString = connectionString;
-            return connection;
-        }
-        catch (ArgumentException)
-        {
-            // Provider not registered, throw helpful error
-            throw new InvalidOperationException(
-                $"Database provider '{provider}' is not registered. " +
-                $"Ensure the appropriate NuGet package is installed and DbProviderFactories.RegisterFactory() is called.");
-        }
+        return state;
     }
 
     public override void Stop()
@@ -203,16 +259,25 @@ public sealed class DatabaseSourceTask : SourceTask
             return [];
         }
 
-        var queryTemplate = BuildQuery();
-        if (string.IsNullOrEmpty(queryTemplate))
+        var records = new List<SourceRecord>();
+
+        foreach (var state in _tableStates)
         {
-            return [];
+            await PollTableAsync(state, records, cancellationToken);
         }
 
-        var records = new List<SourceRecord>();
-        var topic = GetTopic();
+        return records;
+    }
 
-        await using var command = _connection.CreateCommand();
+    private async Task PollTableAsync(TableQueryState state, List<SourceRecord> records, CancellationToken cancellationToken)
+    {
+        var queryTemplate = BuildQuery(state.Table);
+        if (string.IsNullOrEmpty(queryTemplate))
+        {
+            return;
+        }
+
+        await using var command = _connection!.CreateCommand();
 #pragma warning disable CA2100 // Query comes from trusted configuration, not user input
         command.CommandText = queryTemplate;
 #pragma warning restore CA2100
@@ -222,7 +287,7 @@ public sealed class DatabaseSourceTask : SourceTask
         {
             var param = command.CreateParameter();
             param.ParameterName = "@lastValue";
-            param.Value = _lastIncrementingValue;
+            param.Value = state.LastIncrementingValue;
             command.Parameters.Add(param);
         }
 
@@ -230,7 +295,7 @@ public sealed class DatabaseSourceTask : SourceTask
         {
             var param = command.CreateParameter();
             param.ParameterName = "@lastTimestamp";
-            param.Value = _lastTimestampValue.UtcDateTime;
+            param.Value = state.LastTimestampValue.UtcDateTime;
             command.Parameters.Add(param);
         }
 
@@ -248,11 +313,11 @@ public sealed class DatabaseSourceTask : SourceTask
                 // Track incrementing/timestamp values
                 if (columnName.Equals(_incrementingColumn, StringComparison.OrdinalIgnoreCase) && value != null)
                 {
-                    _lastIncrementingValue = Convert.ToInt64(value);
+                    state.LastIncrementingValue = Convert.ToInt64(value);
                 }
                 if (columnName.Equals(_timestampColumn, StringComparison.OrdinalIgnoreCase) && value != null)
                 {
-                    _lastTimestampValue = value switch
+                    state.LastTimestampValue = value switch
                     {
                         DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero),
                         DateTimeOffset dto => dto,
@@ -266,32 +331,28 @@ public sealed class DatabaseSourceTask : SourceTask
 
             var sourceOffset = new Dictionary<string, object>
             {
-                [LastOffsetField] = _lastIncrementingValue,
-                [LastTimestampField] = _lastTimestampValue.ToUnixTimeMilliseconds()
+                [LastOffsetField] = state.LastIncrementingValue,
+                [LastTimestampField] = state.LastTimestampValue.ToUnixTimeMilliseconds()
             };
 
             records.Add(new SourceRecord
             {
-                SourcePartition = _sourcePartition,
+                SourcePartition = state.SourcePartition,
                 SourceOffset = sourceOffset,
-                Topic = topic,
+                Topic = state.Topic,
                 Key = keyJson,
                 Value = valueJson
             });
         }
-
-        return records;
     }
 
-    private string GetTopic()
+    private string BuildTopic(string table)
     {
         if (!string.IsNullOrEmpty(_query))
         {
             return string.IsNullOrEmpty(_topicPrefix) ? "query_results" : $"{_topicPrefix}query_results";
         }
 
-        var tables = _tableWhitelist.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        var table = tables.Length > 0 ? tables[0].Trim() : "unknown";
         return string.IsNullOrEmpty(_topicPrefix) ? table : $"{_topicPrefix}{table}";
     }
 
@@ -305,39 +366,49 @@ public sealed class DatabaseSourceTask : SourceTask
         return null;
     }
 
-    private string BuildQuery()
+    private string BuildQuery(string table)
     {
         if (!string.IsNullOrEmpty(_query))
         {
             return _query;
         }
 
-        var tables = _tableWhitelist.Split(',', StringSplitOptions.RemoveEmptyEntries);
-        if (tables.Length == 0)
+        if (string.IsNullOrEmpty(table))
         {
             return "";
         }
 
-        var table = tables[0].Trim();
-        var query = $"SELECT * FROM {table}";
+        // SQL Server has no LIMIT clause; every other supported provider does
+        var top = _provider == "SqlClient" ? $"TOP ({_batchMaxRows}) " : "";
+        var limit = _provider == "SqlClient" ? "" : $" LIMIT {_batchMaxRows}";
+        var query = $"SELECT {top}* FROM {table}";
 
         switch (_mode)
         {
             case "incrementing":
-                query += $" WHERE {_incrementingColumn} > @lastValue ORDER BY {_incrementingColumn} LIMIT {_batchMaxRows}";
+                query += $" WHERE {_incrementingColumn} > @lastValue ORDER BY {_incrementingColumn}{limit}";
                 break;
             case "timestamp":
-                query += $" WHERE {_timestampColumn} > @lastTimestamp ORDER BY {_timestampColumn} LIMIT {_batchMaxRows}";
+                query += $" WHERE {_timestampColumn} > @lastTimestamp ORDER BY {_timestampColumn}{limit}";
                 break;
             case "timestamp+incrementing":
-                query += $" WHERE {_timestampColumn} > @lastTimestamp OR ({_timestampColumn} = @lastTimestamp AND {_incrementingColumn} > @lastValue) ORDER BY {_timestampColumn}, {_incrementingColumn} LIMIT {_batchMaxRows}";
+                query += $" WHERE {_timestampColumn} > @lastTimestamp OR ({_timestampColumn} = @lastTimestamp AND {_incrementingColumn} > @lastValue) ORDER BY {_timestampColumn}, {_incrementingColumn}{limit}";
                 break;
             default: // bulk
-                query += $" LIMIT {_batchMaxRows}";
+                query += limit;
                 break;
         }
 
         return query;
+    }
+
+    private sealed class TableQueryState
+    {
+        public required Dictionary<string, object> SourcePartition { get; init; }
+        public required string Topic { get; init; }
+        public required string Table { get; init; }
+        public long LastIncrementingValue { get; set; }
+        public DateTimeOffset LastTimestampValue { get; set; } = DateTimeOffset.MinValue;
     }
 }
 
@@ -410,6 +481,7 @@ public sealed class DatabaseSinkTask : SinkTask
     private const string ProviderConfig = "db.provider";
     private const string TableNameFormatConfig = "table.name.format";
     private const string InsertModeConfig = "insert.mode";
+    private const string PkFieldsConfig = "pk.fields";
     private const string BatchSizeConfig = "batch.size";
 
     public override string Version => "1.0.0";
@@ -418,6 +490,7 @@ public sealed class DatabaseSinkTask : SinkTask
     private string _provider = "SqlClient";
     private string _tableNameFormat = "${topic}";
     private string _insertMode = "insert";
+    private string[] _pkFields = [];
     private int _batchSize = 100;
     private DbConnection? _connection;
     private readonly List<SinkRecord> _buffer = new();
@@ -428,36 +501,21 @@ public sealed class DatabaseSinkTask : SinkTask
         _provider = config.GetOrDefault(ProviderConfig, "SqlClient");
         _tableNameFormat = config.GetOrDefault(TableNameFormatConfig, "${topic}");
         _insertMode = config.GetOrDefault(InsertModeConfig, "insert");
+        _pkFields = config.GetOrDefault(PkFieldsConfig, "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         _batchSize = int.Parse(config.GetOrDefault(BatchSizeConfig, "100"));
 
-        // Create database connection using DbProviderFactories
-        _connection = CreateConnection(_provider, _connectionString);
-        _connection.Open();
-    }
+        if (_insertMode == "update" && _pkFields.Length == 0)
+        {
+            throw new ArgumentException($"insert.mode 'update' requires {PkFieldsConfig}");
+        }
+        if (_insertMode == "upsert" && _pkFields.Length == 0 && _provider is "SqlClient" or "Npgsql")
+        {
+            throw new ArgumentException($"insert.mode 'upsert' with provider '{_provider}' requires {PkFieldsConfig}");
+        }
 
-    private static DbConnection CreateConnection(string provider, string connectionString)
-    {
-        try
-        {
-            var factory = DbProviderFactories.GetFactory(provider switch
-            {
-                "SqlClient" => "Microsoft.Data.SqlClient",
-                "Npgsql" => "Npgsql",
-                "MySql" => "MySql.Data.MySqlClient",
-                "Sqlite" => "Microsoft.Data.Sqlite",
-                _ => provider
-            });
-            var connection = factory.CreateConnection()
-                ?? throw new InvalidOperationException($"Failed to create connection for provider: {provider}");
-            connection.ConnectionString = connectionString;
-            return connection;
-        }
-        catch (ArgumentException)
-        {
-            throw new InvalidOperationException(
-                $"Database provider '{provider}' is not registered. " +
-                $"Ensure the appropriate NuGet package is installed and DbProviderFactories.RegisterFactory() is called.");
-        }
+        _connection = DbConnectionFactory.Create(_provider, _connectionString);
+        _connection.Open();
     }
 
     public override void Stop()
@@ -525,22 +583,20 @@ public sealed class DatabaseSinkTask : SinkTask
 
                     if (columns.Count == 0) continue;
 
+                    var commandText = _insertMode switch
+                    {
+                        "upsert" => BuildUpsertStatement(tableName, columns),
+                        "update" => BuildUpdateStatement(tableName, columns),
+                        _ => BuildInsertStatement(tableName, columns)
+                    };
+
+                    if (commandText == null) continue;
+
                     using var command = _connection.CreateCommand();
                     command.Transaction = transaction;
 
 #pragma warning disable CA2100 // Table/column names from trusted configuration, not user input
-                    switch (_insertMode)
-                    {
-                        case "upsert":
-                            command.CommandText = BuildUpsertStatement(tableName, columns);
-                            break;
-                        case "update":
-                            command.CommandText = BuildUpdateStatement(tableName, columns);
-                            break;
-                        default: // insert
-                            command.CommandText = BuildInsertStatement(tableName, columns);
-                            break;
-                    }
+                    command.CommandText = commandText;
 #pragma warning restore CA2100
 
                     // Add parameters
@@ -590,24 +646,98 @@ public sealed class DatabaseSinkTask : SinkTask
         return $"INSERT INTO \"{tableName}\" ({columnList}) VALUES ({paramList})";
     }
 
-    private static string BuildUpsertStatement(string tableName, List<string> columns)
+    private string BuildUpsertStatement(string tableName, List<string> columns)
     {
-        // Generic upsert using INSERT OR REPLACE (SQLite-compatible)
-        // For other databases, this would need to be database-specific
         var columnList = string.Join(", ", columns.Select(c => $"\"{c}\""));
         var paramList = string.Join(", ", columns.Select((_, i) => $"@p{i}"));
-        return $"INSERT OR REPLACE INTO \"{tableName}\" ({columnList}) VALUES ({paramList})";
+        var updateColumns = columns.Where(c => !IsKeyColumn(c)).ToList();
+
+        switch (_provider)
+        {
+            case "Sqlite":
+                return $"INSERT OR REPLACE INTO \"{tableName}\" ({columnList}) VALUES ({paramList})";
+
+            case "MySql":
+            {
+                var setClause = updateColumns.Count > 0
+                    ? string.Join(", ", updateColumns.Select(c => $"\"{c}\" = VALUES(\"{c}\")"))
+                    : $"\"{columns[0]}\" = \"{columns[0]}\"";
+                return $"INSERT INTO \"{tableName}\" ({columnList}) VALUES ({paramList}) ON DUPLICATE KEY UPDATE {setClause}";
+            }
+
+            case "Npgsql":
+            {
+                var conflictColumns = string.Join(", ", KeyColumns(tableName, columns).Select(c => $"\"{c}\""));
+                var action = updateColumns.Count > 0
+                    ? "DO UPDATE SET " + string.Join(", ", updateColumns.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\""))
+                    : "DO NOTHING";
+                return $"INSERT INTO \"{tableName}\" ({columnList}) VALUES ({paramList}) ON CONFLICT ({conflictColumns}) {action}";
+            }
+
+            case "SqlClient":
+            {
+                var keyColumns = KeyColumns(tableName, columns);
+                var sourceSelect = string.Join(", ", columns.Select((c, i) => $"@p{i} AS \"{c}\""));
+                var onClause = string.Join(" AND ", keyColumns.Select(c => $"target.\"{c}\" = source.\"{c}\""));
+                var matchedClause = updateColumns.Count > 0
+                    ? " WHEN MATCHED THEN UPDATE SET " + string.Join(", ", updateColumns.Select(c => $"target.\"{c}\" = source.\"{c}\""))
+                    : "";
+                var insertValues = string.Join(", ", columns.Select(c => $"source.\"{c}\""));
+                return $"MERGE INTO \"{tableName}\" AS target USING (SELECT {sourceSelect}) AS source ON {onClause}{matchedClause} WHEN NOT MATCHED THEN INSERT ({columnList}) VALUES ({insertValues});";
+            }
+
+            default:
+                throw new NotSupportedException($"insert.mode 'upsert' is not supported for provider '{_provider}'.");
+        }
     }
 
-    private static string BuildUpdateStatement(string tableName, List<string> columns)
+    private string? BuildUpdateStatement(string tableName, List<string> columns)
     {
-        if (columns.Count < 2)
-            return BuildInsertStatement(tableName, columns);
+        var setParts = new List<string>();
+        var whereParts = new List<string>();
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (IsKeyColumn(columns[i]))
+            {
+                whereParts.Add($"\"{columns[i]}\" = @p{i}");
+            }
+            else
+            {
+                setParts.Add($"\"{columns[i]}\" = @p{i}");
+            }
+        }
 
-        // Assume first column is the key for WHERE clause
-        var setClause = string.Join(", ", columns.Skip(1).Select((c, i) => $"\"{c}\" = @p{i + 1}"));
-        return $"UPDATE \"{tableName}\" SET {setClause} WHERE \"{columns[0]}\" = @p0";
+        if (whereParts.Count != _pkFields.Length)
+        {
+            throw new InvalidOperationException(
+                $"Record for table '{tableName}' is missing primary key field(s): {MissingKeyFields(columns)}");
+        }
+
+        if (setParts.Count == 0)
+        {
+            // Key-only record: nothing to update
+            return null;
+        }
+
+        return $"UPDATE \"{tableName}\" SET {string.Join(", ", setParts)} WHERE {string.Join(" AND ", whereParts)}";
     }
+
+    private List<string> KeyColumns(string tableName, List<string> columns)
+    {
+        var keyColumns = columns.Where(IsKeyColumn).ToList();
+        if (keyColumns.Count != _pkFields.Length)
+        {
+            throw new InvalidOperationException(
+                $"Record for table '{tableName}' is missing primary key field(s): {MissingKeyFields(columns)}");
+        }
+        return keyColumns;
+    }
+
+    private bool IsKeyColumn(string column)
+        => _pkFields.Contains(column, StringComparer.OrdinalIgnoreCase);
+
+    private string MissingKeyFields(List<string> columns)
+        => string.Join(", ", _pkFields.Where(f => !columns.Contains(f, StringComparer.OrdinalIgnoreCase)));
 
     private string GetTableName(string topic)
     {

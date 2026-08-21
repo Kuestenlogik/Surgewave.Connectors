@@ -34,6 +34,8 @@ public sealed class AzureBlobSinkConnector : SinkConnector
             "Output format: json, jsonlines", EditorHint.Select, options: ["json", "jsonlines"])
         .Define(AzureBlobConnectorConfig.PartitionerConfig, ConfigType.String, AzureBlobConnectorConfig.DefaultPartitioner, Importance.Medium,
             "Partitioner: default, time, field", EditorHint.Select, options: ["default", "time", "field"])
+        .Define(AzureBlobConnectorConfig.PartitionFieldNameConfig, ConfigType.String, "", Importance.Medium,
+            "Record value field to partition by (required for the 'field' partitioner)")
         .Define(AzureBlobConnectorConfig.FlushSizeConfig, ConfigType.Int, (long)AzureBlobConnectorConfig.DefaultFlushSize, Importance.Medium,
             "Number of records before flushing to blob storage")
         .Define(AzureBlobConnectorConfig.RotateIntervalMsConfig, ConfigType.Long, AzureBlobConnectorConfig.DefaultRotateIntervalMs, Importance.Medium,
@@ -82,6 +84,13 @@ public sealed class AzureBlobSinkConnector : SinkConnector
             throw new ArgumentException(
                 $"Invalid partitioner '{partitioner}'. Must be '{AzureBlobConnectorConfig.PartitionerDefault}', " +
                 $"'{AzureBlobConnectorConfig.PartitionerTime}', or '{AzureBlobConnectorConfig.PartitionerField}'.");
+        }
+
+        if (partitioner == AzureBlobConnectorConfig.PartitionerField &&
+            string.IsNullOrWhiteSpace(GetConfigValue(config, AzureBlobConnectorConfig.PartitionFieldNameConfig, "")))
+        {
+            throw new ArgumentException(
+                $"Partitioner '{AzureBlobConnectorConfig.PartitionerField}' requires {AzureBlobConnectorConfig.PartitionFieldNameConfig}");
         }
 
         foreach (var kvp in config)

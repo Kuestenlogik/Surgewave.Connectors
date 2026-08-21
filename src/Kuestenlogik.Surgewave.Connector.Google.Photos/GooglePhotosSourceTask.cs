@@ -1,7 +1,10 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.PhotosLibrary.v1;
 using Google.Apis.PhotosLibrary.v1.Data;
 using Google.Apis.Services;
@@ -16,6 +19,7 @@ namespace Kuestenlogik.Surgewave.Connector.Google.Photos;
 public sealed class GooglePhotosSourceTask : SourceTask
 {
     private PhotosLibraryService? _service;
+    private GoogleAuthorizationCodeFlow? _authFlow;
     private string _topic = null!;
     private string? _albumId;
     private List<string> _albumNames = [];
@@ -24,6 +28,9 @@ public sealed class GooglePhotosSourceTask : SourceTask
     private bool _includeMetadata;
     private bool _includeContent;
     private int _contentMaxSize;
+    private bool _includeShared;
+    private DateTime? _dateRangeStart;
+    private DateTime? _dateRangeEnd;
     private DateTime _lastPoll = DateTime.MinValue;
     private readonly HashSet<string> _processedIds = [];
     private long _messageId;
@@ -42,6 +49,17 @@ public sealed class GooglePhotosSourceTask : SourceTask
         _includeContent = (config.TryGetValue(GooglePhotosConnectorConfig.IncludeContent, out var includeContent) ? includeContent : "false") == "true";
         _contentMaxSize = int.Parse(config.TryGetValue(GooglePhotosConnectorConfig.ContentMaxSize, out var contentMaxSize)
             ? contentMaxSize : GooglePhotosConnectorConfig.DefaultContentMaxSize.ToString());
+        _includeShared = (config.TryGetValue(GooglePhotosConnectorConfig.IncludeShared, out var includeShared) ? includeShared : "false") == "true";
+
+        if (config.TryGetValue(GooglePhotosConnectorConfig.DateRangeStart, out var dateStart) && !string.IsNullOrWhiteSpace(dateStart))
+        {
+            _dateRangeStart = DateTime.Parse(dateStart, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        }
+
+        if (config.TryGetValue(GooglePhotosConnectorConfig.DateRangeEnd, out var dateEnd) && !string.IsNullOrWhiteSpace(dateEnd))
+        {
+            _dateRangeEnd = DateTime.Parse(dateEnd, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal);
+        }
 
         if (config.TryGetValue(GooglePhotosConnectorConfig.Albums, out var albums) && !string.IsNullOrWhiteSpace(albums))
         {
@@ -49,27 +67,33 @@ public sealed class GooglePhotosSourceTask : SourceTask
         }
 
         // Initialize Google Photos API client
-        GoogleCredential credential;
+        ICredential credential;
 
         if (config.TryGetValue(GooglePhotosConnectorConfig.CredentialsJson, out var json) && !string.IsNullOrWhiteSpace(json))
         {
-            credential = GoogleCredential.FromJson(json);
+            credential = GoogleCredential.FromJson(json).CreateScoped(PhotosLibraryService.Scope.PhotoslibraryReadonly);
         }
         else if (config.TryGetValue(GooglePhotosConnectorConfig.CredentialsFile, out var file) && !string.IsNullOrWhiteSpace(file))
         {
-            credential = GoogleCredential.FromFile(file);
+            credential = GoogleCredential.FromFile(file).CreateScoped(PhotosLibraryService.Scope.PhotoslibraryReadonly);
         }
         else
         {
-            // OAuth2 flow
+            // OAuth2 flow: the refresh token is exchanged for access tokens via the client credentials
             var clientId = config[GooglePhotosConnectorConfig.ClientId];
             var clientSecret = config[GooglePhotosConnectorConfig.ClientSecret];
             var refreshToken = config[GooglePhotosConnectorConfig.RefreshToken];
 
-            credential = GoogleCredential.FromAccessToken(refreshToken);
-        }
+            // owned by the task and disposed in Stop(): the credential keeps using
+            // the flow for token refreshes after Start returns
+            _authFlow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+            {
+                ClientSecrets = new ClientSecrets { ClientId = clientId, ClientSecret = clientSecret },
+                Scopes = [PhotosLibraryService.Scope.PhotoslibraryReadonly]
+            });
 
-        credential = credential.CreateScoped(PhotosLibraryService.Scope.PhotoslibraryReadonly);
+            credential = new UserCredential(_authFlow, "user", new TokenResponse { RefreshToken = refreshToken });
+        }
 
         _service = new PhotosLibraryService(new BaseClientService.Initializer
         {
@@ -141,9 +165,9 @@ public sealed class GooglePhotosSourceTask : SourceTask
                 _processedIds.Add(item.Id);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -152,13 +176,25 @@ public sealed class GooglePhotosSourceTask : SourceTask
     private async Task<IEnumerable<MediaItem>> FetchAlbumMediaAsync(string albumId, CancellationToken cancellationToken)
     {
         var items = new List<MediaItem>();
-        var request = _service!.MediaItems.Search(new SearchMediaItemsRequest { AlbumId = albumId });
+        string? pageToken = null;
 
-        var response = await request.ExecuteAsync(cancellationToken);
-        if (response.MediaItems != null)
+        do
         {
-            items.AddRange(response.MediaItems);
-        }
+            var request = _service!.MediaItems.Search(new SearchMediaItemsRequest
+            {
+                AlbumId = albumId,
+                PageSize = 100,
+                PageToken = pageToken
+            });
+
+            var response = await request.ExecuteAsync(cancellationToken);
+            if (response.MediaItems != null)
+            {
+                items.AddRange(response.MediaItems);
+            }
+
+            pageToken = response.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
 
         return items;
     }
@@ -166,26 +202,78 @@ public sealed class GooglePhotosSourceTask : SourceTask
     private async Task<IEnumerable<MediaItem>> FetchAllMediaAsync(CancellationToken cancellationToken)
     {
         var items = new List<MediaItem>();
-        // Google Photos API doesn't have a simple list method - use search without filters
-        var searchRequest = new SearchMediaItemsRequest { PageSize = 100 };
-        var request = _service!.MediaItems.Search(searchRequest);
+        string? pageToken = null;
 
-        var response = await request.ExecuteAsync(cancellationToken);
-        if (response.MediaItems != null)
+        do
         {
-            items.AddRange(response.MediaItems);
-        }
+            // Google Photos API doesn't have a simple list method - use search with optional filters
+            var searchRequest = new SearchMediaItemsRequest
+            {
+                PageSize = 100,
+                PageToken = pageToken,
+                Filters = BuildDateFilters()
+            };
+            var request = _service!.MediaItems.Search(searchRequest);
+
+            var response = await request.ExecuteAsync(cancellationToken);
+            if (response.MediaItems != null)
+            {
+                items.AddRange(response.MediaItems);
+            }
+
+            pageToken = response.NextPageToken;
+        } while (!string.IsNullOrEmpty(pageToken));
 
         return items;
     }
+
+    private Filters? BuildDateFilters()
+    {
+        if (_dateRangeStart == null && _dateRangeEnd == null)
+        {
+            return null;
+        }
+
+        // The API requires both ends of a range; open ends fall back to the epoch / today
+        return new Filters
+        {
+            DateFilter = new DateFilter
+            {
+                Ranges =
+                [
+                    new DateRange
+                    {
+                        StartDate = ToApiDate(_dateRangeStart ?? DateTime.UnixEpoch),
+                        EndDate = ToApiDate(_dateRangeEnd ?? DateTime.UtcNow)
+                    }
+                ]
+            }
+        };
+    }
+
+    private static Date ToApiDate(DateTime value) => new()
+    {
+        Year = value.Year,
+        Month = value.Month,
+        Day = value.Day
+    };
 
     private async Task<Album?> FindAlbumByNameAsync(string name, CancellationToken cancellationToken)
     {
         var request = _service!.Albums.List();
         var response = await request.ExecuteAsync(cancellationToken);
 
-        return response.Albums?.FirstOrDefault(a =>
+        var album = response.Albums?.FirstOrDefault(a =>
             a.Title.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+        if (album != null || !_includeShared)
+        {
+            return album;
+        }
+
+        var sharedResponse = await _service.SharedAlbums.List().ExecuteAsync(cancellationToken);
+        return sharedResponse.SharedAlbums?.FirstOrDefault(a =>
+            name.Equals(a.Title, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<SourceRecord> CreateRecordAsync(MediaItem item, CancellationToken cancellationToken)
@@ -276,6 +364,7 @@ public sealed class GooglePhotosSourceTask : SourceTask
     {
         _service?.Dispose();
         _httpClient?.Dispose();
+        _authFlow?.Dispose();
     }
 
     protected override void Dispose(bool disposing)

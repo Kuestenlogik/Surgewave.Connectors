@@ -109,8 +109,12 @@ public sealed class SpannerSourceTask : SourceTask
                 cmd.Parameters.Add("lastValue", GetSpannerDbType(_lastIncrementalValue), _lastIncrementalValue);
             }
 
-            // Set timestamp bound
-            var txnOptions = GetTimestampBoundOptions();
+            // Read under the configured timestamp bound
+            using var transaction = await _connection.BeginTransactionAsync(
+                SpannerTransactionCreationOptions.ForTimestampBoundReadOnly(GetTimestampBound()),
+                new SpannerTransactionOptions(),
+                cancellationToken);
+            cmd.Transaction = transaction;
 
             using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
@@ -132,9 +136,11 @@ public sealed class SpannerSourceTask : SourceTask
                 if (records.Count >= _rowLimit) break;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the failure but keep the rows already read: _lastIncrementalValue
+            // has advanced past them, so dropping them here would skip them forever.
+            Context?.RaiseError?.Invoke(ex);
         }
         finally
         {
@@ -214,13 +220,13 @@ public sealed class SpannerSourceTask : SourceTask
         };
     }
 
-    private TimestampBoundMode GetTimestampBoundOptions()
+    private TimestampBound GetTimestampBound()
     {
         return _timestampBound.ToLowerInvariant() switch
         {
-            "exact" => TimestampBoundMode.Exact,
-            "bounded_staleness" => TimestampBoundMode.BoundedStaleness,
-            _ => TimestampBoundMode.Strong
+            "exact" => TimestampBound.OfExactStaleness(TimeSpan.FromSeconds(_maxStalenessSeconds)),
+            "bounded_staleness" => TimestampBound.OfMaxStaleness(TimeSpan.FromSeconds(_maxStalenessSeconds)),
+            _ => TimestampBound.Strong
         };
     }
 
@@ -296,11 +302,4 @@ public sealed class SpannerSourceTask : SourceTask
         }
         base.Dispose(disposing);
     }
-}
-
-internal enum TimestampBoundMode
-{
-    Strong,
-    Exact,
-    BoundedStaleness
 }

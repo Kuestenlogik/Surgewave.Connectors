@@ -126,14 +126,10 @@ public sealed class DynamoDbSinkTask : SinkTask
 
             foreach (var record in batch)
             {
-                var item = ParseRecordValue(record);
-                if (item == null)
-                    continue;
-
-                // Handle tombstones (null values) as deletes
+                // Handle tombstones (null values) as deletes; the key comes from the record key
                 if (record.Value == null || record.Value.Length == 0)
                 {
-                    var key = GetKeyFromRecord(record, item);
+                    var key = GetKeyFromRecord(record, new Dictionary<string, AttributeValue>());
                     if (key.Count > 0)
                     {
                         writeRequests.Add(new WriteRequest
@@ -141,14 +137,17 @@ public sealed class DynamoDbSinkTask : SinkTask
                             DeleteRequest = new DeleteRequest { Key = key }
                         });
                     }
+                    continue;
                 }
-                else
+
+                var item = ParseRecordValue(record);
+                if (item == null)
+                    continue;
+
+                writeRequests.Add(new WriteRequest
                 {
-                    writeRequests.Add(new WriteRequest
-                    {
-                        PutRequest = new PutRequest { Item = item }
-                    });
-                }
+                    PutRequest = new PutRequest { Item = item }
+                });
             }
 
             if (writeRequests.Count > 0)

@@ -99,6 +99,11 @@ public sealed class FileStreamSinkTask : SinkTask
 
         foreach (var record in records)
         {
+            if (record.Value == null)
+            {
+                continue;
+            }
+
             var value = Encoding.UTF8.GetString(record.Value);
             await _writer.WriteLineAsync(value.AsMemory(), cancellationToken);
         }

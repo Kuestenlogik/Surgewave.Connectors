@@ -23,6 +23,7 @@ public sealed class AzureBlobSourceTask : SourceTask
     private string _lastProcessedBlob = "";
     private DateTimeOffset _lastModifiedTime = DateTimeOffset.MinValue;
     private readonly HashSet<string> _processedBlobs = new();
+    private readonly List<string> _pendingDeletes = new();
 
     public override string Version => "1.0.0";
 
@@ -111,6 +112,11 @@ public sealed class AzureBlobSourceTask : SourceTask
 
         var records = new List<SourceRecord>();
 
+        // Freeze the watermark for this listing pass: listing is alphabetical, not ordered
+        // by modification time, so comparing against a value that moves during the loop
+        // would skip blobs whose LastModified is older than an already-processed one.
+        var modifiedWatermark = _lastModifiedTime;
+
         // List blobs in container
         await foreach (var blobItem in _containerClient.GetBlobsAsync(BlobTraits.None, BlobStates.None, _prefix, cancellationToken))
         {
@@ -118,9 +124,9 @@ public sealed class AzureBlobSourceTask : SourceTask
             if (_processedBlobs.Contains(blobItem.Name))
                 continue;
 
-            // Skip blobs older than last modified time (for resumability)
+            // Skip blobs older than the watermark from the previous run (for resumability)
             var blobModified = blobItem.Properties.LastModified ?? DateTimeOffset.MinValue;
-            if (blobModified <= _lastModifiedTime && !string.IsNullOrEmpty(_lastProcessedBlob))
+            if (blobModified <= modifiedWatermark && !string.IsNullOrEmpty(_lastProcessedBlob))
                 continue;
 
             // Download and process blob
@@ -133,17 +139,33 @@ public sealed class AzureBlobSourceTask : SourceTask
 
             // Track processed blob
             _lastProcessedBlob = blobItem.Name;
-            _lastModifiedTime = blobModified;
+            if (blobModified > _lastModifiedTime)
+            {
+                _lastModifiedTime = blobModified;
+            }
             _processedBlobs.Add(blobItem.Name);
 
-            // Delete if configured
+            // Deletion happens in CommitAsync, once the records are durably produced
             if (_deleteAfterRead)
             {
-                await blobClient.DeleteIfExistsAsync(cancellationToken: cancellationToken);
+                _pendingDeletes.Add(blobItem.Name);
             }
         }
 
         return records;
+    }
+
+    public override async Task CommitAsync(CancellationToken cancellationToken)
+    {
+        if (_containerClient == null || _pendingDeletes.Count == 0)
+            return;
+
+        foreach (var blobName in _pendingDeletes)
+        {
+            await _containerClient.GetBlobClient(blobName).DeleteIfExistsAsync(cancellationToken: cancellationToken);
+        }
+
+        _pendingDeletes.Clear();
     }
 
     private IEnumerable<SourceRecord> ParseContent(string blobName, string content)

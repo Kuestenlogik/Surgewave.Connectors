@@ -72,10 +72,17 @@ public sealed class DiscordSourceTask : SourceTask
         }
 
         // Start connection in background
-        Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
-            await _client.LoginAsync(TokenType.Bot, token);
-            await _client.StartAsync();
+            try
+            {
+                await _client.LoginAsync(TokenType.Bot, token);
+                await _client.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                Context.RaiseError?.Invoke(ex);
+            }
         });
     }
 
@@ -238,7 +245,7 @@ public sealed class DiscordSourceTask : SourceTask
     {
         var records = new List<SourceRecord>();
 
-        while (_pendingRecords.TryDequeue(out var record) && records.Count < 100)
+        while (records.Count < 100 && _pendingRecords.TryDequeue(out var record))
         {
             records.Add(record);
         }

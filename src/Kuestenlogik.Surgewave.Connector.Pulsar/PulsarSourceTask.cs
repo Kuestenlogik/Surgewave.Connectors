@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using DotPulsar;
@@ -21,6 +23,8 @@ public sealed class PulsarSourceTask : SourceTask
     private bool _topicMappingEnabled;
     private string _topicMappingPrefix = "";
     private long _messageId;
+    private readonly ConcurrentDictionary<SourceRecord, MessageId> _pendingAcks = new(ReferenceEqualityComparer.Instance);
+    private readonly ConcurrentQueue<MessageId> _committedAcks = new();
 
     public override string Version => "1.0.0";
 
@@ -53,20 +57,22 @@ public sealed class PulsarSourceTask : SourceTask
                 ? SubscriptionInitialPosition.Latest
                 : SubscriptionInitialPosition.Earliest);
 
-        // Subscribe to topic (DotPulsar supports single topic per consumer)
+        // Subscribe to the configured topics or a topic regex pattern
         if (config.TryGetValue(PulsarConnectorConfig.Topics, out var topicsStr) && !string.IsNullOrWhiteSpace(topicsStr))
         {
             var topics = topicsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            // Use first topic - DotPulsar consumer builder uses Topic() for single topic
-            if (topics.Length > 0)
+            if (topics.Length == 1)
             {
                 consumerBuilder.Topic(topics[0]);
+            }
+            else if (topics.Length > 1)
+            {
+                consumerBuilder.Topics(topics);
             }
         }
         else if (config.TryGetValue(PulsarConnectorConfig.TopicsPattern, out var pattern) && !string.IsNullOrWhiteSpace(pattern))
         {
-            // Topic pattern not supported in current DotPulsar - use direct topic
-            consumerBuilder.Topic(pattern);
+            consumerBuilder.TopicsPattern(new Regex(pattern, RegexOptions.Compiled));
         }
 
         if (config.TryGetValue(PulsarConnectorConfig.ConsumerName, out var consumerName) && !string.IsNullOrWhiteSpace(consumerName))
@@ -103,14 +109,14 @@ public sealed class PulsarSourceTask : SourceTask
                     Topic = surgewaveTopic,
                     Key = message.KeyBytes is { Length: > 0 } keyBytes ? keyBytes.ToArray() : null,
                     Value = message.Data.ToArray(),
-                    Timestamp = DateTimeOffset.FromUnixTimeMilliseconds((long)(message.PublishTime / 1000)),
+                    Timestamp = message.PublishTimeAsDateTimeOffset,
                     Headers = ConvertProperties(message, pulsarTopic)
                 };
 
                 records.Add(record);
 
-                // Acknowledge the message
-                await _consumer.Acknowledge(message, cancellationToken);
+                // Acknowledged in CommitRecord/CommitAsync once the record is durable in Surgewave
+                _pendingAcks[record] = message.MessageId;
             }
         }
         catch (OperationCanceledException)
@@ -119,6 +125,25 @@ public sealed class PulsarSourceTask : SourceTask
         }
 
         return records;
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (_pendingAcks.TryRemove(record, out var messageId))
+        {
+            _committedAcks.Enqueue(messageId);
+        }
+    }
+
+    public override async Task CommitAsync(CancellationToken cancellationToken)
+    {
+        if (_consumer == null)
+            return;
+
+        while (_committedAcks.TryDequeue(out var messageId))
+        {
+            await _consumer.Acknowledge(messageId, cancellationToken);
+        }
     }
 
     private string GetSurgewaveTopic(string pulsarTopic)
@@ -147,7 +172,7 @@ public sealed class PulsarSourceTask : SourceTask
         {
             ["pulsar.source.topic"] = Encoding.UTF8.GetBytes(topic),
             ["pulsar.message.id"] = Encoding.UTF8.GetBytes(message.MessageId.ToString()),
-            ["pulsar.publish.time"] = Encoding.UTF8.GetBytes(message.PublishTime.ToString("O"))
+            ["pulsar.publish.time"] = Encoding.UTF8.GetBytes(message.PublishTimeAsDateTimeOffset.ToString("O", CultureInfo.InvariantCulture))
         };
 
         if (!string.IsNullOrEmpty(message.ProducerName))

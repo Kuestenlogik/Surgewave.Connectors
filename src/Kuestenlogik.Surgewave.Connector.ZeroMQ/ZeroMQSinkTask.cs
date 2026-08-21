@@ -89,26 +89,38 @@ public sealed class ZeroMQSinkTask : SinkTask
                     var msg = new NetMQMessage();
                     msg.Append(topic);
                     msg.Append(record.Value);
-                    _socket.TrySendMultipartMessage(_sendTimeout, msg);
+                    if (!_socket.TrySendMultipartMessage(_sendTimeout, msg))
+                    {
+                        throw new TimeoutException($"ZeroMQ {_socketType} multipart send timed out or was rejected by the high-water mark.");
+                    }
                 }
                 else if (_socket is RequestSocket reqSocket)
                 {
                     // REQ socket: send and wait for reply
-                    if (reqSocket.TrySendFrame(_sendTimeout, record.Value))
+                    if (!reqSocket.TrySendFrame(_sendTimeout, record.Value))
                     {
-                        // Wait for reply (required for REQ/REP pattern)
-                        reqSocket.TryReceiveFrameBytes(_sendTimeout, out _);
+                        throw new TimeoutException($"ZeroMQ {_socketType} send timed out or was rejected by the high-water mark.");
+                    }
+
+                    // Wait for reply (required for REQ/REP pattern)
+                    if (!reqSocket.TryReceiveFrameBytes(_sendTimeout, out _))
+                    {
+                        throw new TimeoutException($"ZeroMQ {_socketType} received no reply; delivery is unconfirmed.");
                     }
                 }
                 else
                 {
                     // PUSH or PUB without topic: send single frame
-                    _socket!.TrySendFrame(_sendTimeout, record.Value);
+                    if (!_socket!.TrySendFrame(_sendTimeout, record.Value))
+                    {
+                        throw new TimeoutException($"ZeroMQ {_socketType} send timed out or was rejected by the high-water mark.");
+                    }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
 

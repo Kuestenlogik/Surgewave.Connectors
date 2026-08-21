@@ -28,6 +28,7 @@ public sealed class OneDriveSinkTask : SinkTask
     private int _batchSize = OneDriveConnectorConfig.DefaultBatchSize;
     private int _retryMax = OneDriveConnectorConfig.DefaultRetryMax;
     private int _retryBackoffMs = OneDriveConnectorConfig.DefaultRetryBackoffMs;
+    private string? _resolvedDriveId;
     private bool _disposed;
 
     public override string Version => "1.0.0";
@@ -100,6 +101,9 @@ public sealed class OneDriveSinkTask : SinkTask
             catch (Exception ex)
             {
                 Context?.RaiseError?.Invoke(ex);
+
+                // Rethrow so the worker retries/dead-letters instead of committing an undelivered record
+                throw;
             }
         }
     }
@@ -161,7 +165,7 @@ public sealed class OneDriveSinkTask : SinkTask
     {
         if (_graphClient == null) return;
 
-        var driveId = GetDriveId();
+        var driveId = await GetDriveIdAsync(cancellationToken);
 
         // Build the item path
         var itemPath = BuildItemPath(fileName);
@@ -181,25 +185,43 @@ public sealed class OneDriveSinkTask : SinkTask
     {
         if (_graphClient == null) return;
 
-        using var stream = new MemoryStream(content);
-
         if (_updateMode == OneDriveConnectorConfig.UpdateModeCreate)
         {
             // Create new file only (fail if exists)
-            await _graphClient.Drives[driveId].Root.ItemWithPath(itemPath).Content
-                .PutAsync(stream, cancellationToken: cancellationToken);
+            if (await ItemExistsAsync(driveId, itemPath, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    $"File '{itemPath}' already exists and '{OneDriveConnectorConfig.UpdateModeConfig}' is '{OneDriveConnectorConfig.UpdateModeCreate}'.");
+            }
         }
         else if (_updateMode == OneDriveConnectorConfig.UpdateModeReplace)
         {
-            // Replace existing file
-            await _graphClient.Drives[driveId].Root.ItemWithPath(itemPath).Content
-                .PutAsync(stream, cancellationToken: cancellationToken);
+            // Replace existing file only (fail if missing)
+            if (!await ItemExistsAsync(driveId, itemPath, cancellationToken))
+            {
+                throw new InvalidOperationException(
+                    $"File '{itemPath}' does not exist and '{OneDriveConnectorConfig.UpdateModeConfig}' is '{OneDriveConnectorConfig.UpdateModeReplace}'.");
+            }
         }
-        else // create-or-replace (default)
+
+        using var stream = new MemoryStream(content);
+        await _graphClient.Drives[driveId].Root.ItemWithPath(itemPath).Content
+            .PutAsync(stream, cancellationToken: cancellationToken);
+    }
+
+    private async Task<bool> ItemExistsAsync(string driveId, string itemPath, CancellationToken cancellationToken)
+    {
+        if (_graphClient == null) return false;
+
+        try
         {
-            // Create or replace
-            await _graphClient.Drives[driveId].Root.ItemWithPath(itemPath).Content
-                .PutAsync(stream, cancellationToken: cancellationToken);
+            var item = await _graphClient.Drives[driveId].Root.ItemWithPath(itemPath)
+                .GetAsync(cancellationToken: cancellationToken);
+            return item != null;
+        }
+        catch (global::Microsoft.Graph.Models.ODataErrors.ODataError ex) when (ex.ResponseStatusCode == 404)
+        {
+            return false;
         }
     }
 
@@ -273,12 +295,25 @@ public sealed class OneDriveSinkTask : SinkTask
         return $"{folderPath}/{fileName}";
     }
 
-    private string GetDriveId()
+    private async Task<string> GetDriveIdAsync(CancellationToken cancellationToken)
     {
         if (!string.IsNullOrEmpty(_driveId))
             return _driveId;
 
-        return _driveId ?? "me";
+        if (_resolvedDriveId != null)
+            return _resolvedDriveId;
+
+        // App-only auth has no "me" context; resolve the configured user's default drive
+        if (_graphClient == null || string.IsNullOrEmpty(_userId))
+        {
+            throw new InvalidOperationException(
+                $"Either '{OneDriveConnectorConfig.DriveIdConfig}' or '{OneDriveConnectorConfig.UserIdConfig}' must be configured to resolve the target drive.");
+        }
+
+        var drive = await _graphClient.Users[_userId].Drive.GetAsync(cancellationToken: cancellationToken);
+        _resolvedDriveId = drive?.Id
+            ?? throw new InvalidOperationException($"Could not resolve the default drive for user '{_userId}'.");
+        return _resolvedDriveId;
     }
 
     private string GetConflictBehavior()

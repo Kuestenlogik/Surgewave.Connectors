@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Google.Api.Gax.Grpc;
@@ -71,30 +72,37 @@ public sealed class BigtableSinkTask : SinkTask
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
+        if (_writeMode is "increment" or "append")
+        {
+            // Increment and append are read-modify-write operations and cannot be
+            // expressed as MutateRows entries.
+            foreach (var record in records)
+            {
+                if (record.Value == null) continue;
+
+                await ApplyReadModifyWriteAsync(record, cancellationToken);
+            }
+
+            return;
+        }
+
         var entries = new List<MutateRowsRequest.Types.Entry>();
 
         foreach (var record in records)
         {
             if (record.Value == null) continue;
 
-            try
+            var entry = CreateMutationEntry(record);
+            if (entry != null)
             {
-                var entry = CreateMutationEntry(record);
-                if (entry != null)
-                {
-                    entries.Add(entry);
-                }
-
-                // Flush batch if full
-                if (entries.Count >= _batchSize)
-                {
-                    await FlushEntriesAsync(entries, cancellationToken);
-                    entries.Clear();
-                }
+                entries.Add(entry);
             }
-            catch (Exception)
+
+            // Flush batch if full
+            if (entries.Count >= _batchSize)
             {
-                // Log and continue
+                await FlushEntriesAsync(entries, cancellationToken);
+                entries.Clear();
             }
         }
 
@@ -161,49 +169,114 @@ public sealed class BigtableSinkTask : SinkTask
         };
     }
 
-    private void AddMutation(List<Mutation> mutations, string family, string column, JsonElement value, long timestamp)
+    private static void AddMutation(List<Mutation> mutations, string family, string column, JsonElement value, long timestamp)
     {
-        byte[] cellValue;
+        var mutation = Mutations.SetCell(family, ByteString.CopyFromUtf8(column), ByteString.CopyFrom(DecodeCellValue(value)), new BigtableVersion(timestamp));
 
+        mutations.Add(mutation);
+    }
+
+    private static byte[] DecodeCellValue(JsonElement value)
+    {
         if (value.ValueKind == JsonValueKind.Object && value.TryGetProperty("value", out var valueProp))
         {
             // Object with value field - may be base64 encoded
             var valueStr = valueProp.GetString() ?? "";
             try
             {
-                cellValue = Convert.FromBase64String(valueStr);
+                return Convert.FromBase64String(valueStr);
             }
-            catch
+            catch (FormatException)
             {
-                cellValue = Encoding.UTF8.GetBytes(valueStr);
+                return Encoding.UTF8.GetBytes(valueStr);
             }
         }
-        else if (value.ValueKind == JsonValueKind.String)
+
+        if (value.ValueKind == JsonValueKind.String)
         {
-            cellValue = Encoding.UTF8.GetBytes(value.GetString() ?? "");
+            return Encoding.UTF8.GetBytes(value.GetString() ?? "");
         }
-        else if (value.ValueKind == JsonValueKind.Number)
+
+        return Encoding.UTF8.GetBytes(value.ToString());
+    }
+
+    private async Task ApplyReadModifyWriteAsync(SinkRecord record, CancellationToken ct)
+    {
+        using var doc = JsonDocument.Parse(record.Value!);
+        var root = doc.RootElement;
+
+        // Get row key
+        string rowKey;
+        if (root.TryGetProperty(_rowKeyField, out var rowKeyProp))
         {
-            if (_writeMode == "increment" && value.TryGetInt64(out var longVal))
+            rowKey = rowKeyProp.GetString() ?? "";
+        }
+        else if (record.Key != null)
+        {
+            rowKey = Encoding.UTF8.GetString(record.Key);
+        }
+        else
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(rowKey)) return;
+
+        var rules = new List<ReadModifyWriteRule>();
+
+        if (root.TryGetProperty("families", out var familiesObj))
+        {
+            foreach (var family in familiesObj.EnumerateObject())
             {
-                // For increment, store as big-endian 8 bytes
-                cellValue = BitConverter.GetBytes(System.Net.IPAddress.HostToNetworkOrder(longVal));
-            }
-            else
-            {
-                cellValue = Encoding.UTF8.GetBytes(value.ToString());
+                foreach (var column in family.Value.EnumerateObject())
+                {
+                    rules.Add(CreateReadModifyWriteRule(family.Name, column.Name, column.Value));
+                }
             }
         }
         else
         {
-            cellValue = Encoding.UTF8.GetBytes(value.ToString());
+            // Flat structure - all columns go to default family
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.Name == _rowKeyField) continue;
+                rules.Add(CreateReadModifyWriteRule(_defaultColumnFamily, prop.Name, prop.Value));
+            }
         }
 
-        // Note: Append and Increment operations require ReadModifyWriteRow API
-        // For simplicity, we use SetCell for all cases
-        var mutation = Mutations.SetCell(family, ByteString.CopyFromUtf8(column), ByteString.CopyFrom(cellValue), new BigtableVersion(timestamp));
+        if (rules.Count == 0) return;
 
-        mutations.Add(mutation);
+        try
+        {
+            await _client!.ReadModifyWriteRowAsync(_tableName, rowKey, rules, CallSettings.FromCancellationToken(ct));
+        }
+        catch (Exception ex)
+        {
+            Context.RaiseError?.Invoke(ex);
+            throw;
+        }
+    }
+
+    private ReadModifyWriteRule CreateReadModifyWriteRule(string family, string column, JsonElement value)
+    {
+        if (_writeMode == "increment")
+        {
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var longVal))
+            {
+                return ReadModifyWriteRules.Increment(family, column, longVal);
+            }
+
+            if (value.ValueKind == JsonValueKind.String
+                && long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            {
+                return ReadModifyWriteRules.Increment(family, column, parsed);
+            }
+
+            throw new InvalidOperationException(
+                $"Write mode 'increment' requires an integer value for column '{family}:{column}'.");
+        }
+
+        return ReadModifyWriteRules.Append(family, column, DecodeCellValue(value));
     }
 
     private async Task FlushEntriesAsync(List<MutateRowsRequest.Types.Entry> entries, CancellationToken ct)
@@ -212,11 +285,29 @@ public sealed class BigtableSinkTask : SinkTask
 
         try
         {
-            await _client!.MutateRowsAsync(_tableName, entries, CallSettings.FromCancellationToken(ct));
+            var response = await _client!.MutateRowsAsync(_tableName, entries, CallSettings.FromCancellationToken(ct));
+
+            // MutateRows is not atomic - each entry carries its own status
+            var failedCount = 0;
+            string? firstError = null;
+            foreach (var entry in response.Entries)
+            {
+                var status = entry.Status;
+                if (status == null || status.Code == (int)Google.Rpc.Code.Ok) continue;
+                failedCount++;
+                firstError ??= $"{status.Message} (code {status.Code})";
+            }
+
+            if (failedCount > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Bigtable rejected {failedCount} of {entries.Count} mutations; first error: {firstError}");
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            Context.RaiseError?.Invoke(ex);
+            throw;
         }
     }
 

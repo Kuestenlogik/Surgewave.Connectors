@@ -210,6 +210,10 @@ public sealed class AzureBlobSinkConnectorTests
             ["topics"] = "test-topic",
             ["partitioner"] = partitioner
         };
+        if (partitioner == "field")
+        {
+            config["partition.field.name"] = "customerId";
+        }
 
         // Should not throw
         connector.Start(config);

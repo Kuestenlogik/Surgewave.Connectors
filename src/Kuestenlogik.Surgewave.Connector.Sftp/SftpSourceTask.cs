@@ -158,9 +158,11 @@ public sealed class SftpSourceTask : SourceTask
                 }
             }
 
-            // List files
+            // List files; the last-modified threshold restored from offset storage
+            // keeps already-emitted files from being re-read after a restart
             var files = ListFiles(_remotePath, _recursive)
                 .Where(f => !_processedFiles.Contains(f.FullName))
+                .Where(f => f.LastWriteTime >= _lastModifiedThreshold)
                 .Where(f => f.Length >= _minFileSizeBytes && f.Length <= _maxFileSizeBytes)
                 .Where(f => _filePattern == null || _filePattern.IsMatch(f.Name))
                 .OrderBy(f => f.LastWriteTime)
@@ -176,16 +178,7 @@ public sealed class SftpSourceTask : SourceTask
                     var record = CreateRecord(file, content);
                     records.Add(record);
 
-                    // Post-process file
-                    if (_deleteAfterRead)
-                    {
-                        _client.DeleteFile(file.FullName);
-                    }
-                    else if (_moveAfterRead && !string.IsNullOrWhiteSpace(_moveToPath))
-                    {
-                        var destPath = Path.Combine(_moveToPath, file.Name).Replace('\\', '/');
-                        _client.RenameFile(file.FullName, destPath);
-                    }
+                    // Delete/move happens in CommitRecord, once the record is durable
 
                     _processedFiles.Add(file.FullName);
                     if (file.LastWriteTime > _lastModifiedThreshold)
@@ -202,8 +195,9 @@ public sealed class SftpSourceTask : SourceTask
             _lastPollTime = DateTimeOffset.UtcNow;
             return records;
         }
-        catch (Renci.SshNet.Common.SshException)
+        catch (Renci.SshNet.Common.SshException ex)
         {
+            Context?.RaiseError?.Invoke(ex);
             _client?.Dispose();
             _client = null;
             await Task.Delay(5000, cancellationToken);
@@ -213,6 +207,46 @@ public sealed class SftpSourceTask : SourceTask
         {
             await Task.Delay(5000, cancellationToken);
             return [];
+        }
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        // Destructive post-read actions run only after the record is durably produced;
+        // a crash before this point leaves the file on the server for re-delivery
+        if (!_deleteAfterRead && !(_moveAfterRead && !string.IsNullOrWhiteSpace(_moveToPath)))
+            return;
+
+        if (!record.SourceOffset.TryGetValue(SftpConnectorConfig.OffsetLastFileName, out var fileNameValue) ||
+            fileNameValue is not string fullName || string.IsNullOrEmpty(fullName))
+            return;
+
+        try
+        {
+            if (_client == null || !_client.IsConnected)
+            {
+                _client?.Dispose();
+                _client = CreateClient();
+                _client.Connect();
+            }
+
+            if (_deleteAfterRead)
+            {
+                _client.DeleteFile(fullName);
+            }
+            else
+            {
+                var fileName = fullName[(fullName.LastIndexOf('/') + 1)..];
+                var destPath = Path.Combine(_moveToPath, fileName).Replace('\\', '/');
+                _client.RenameFile(fullName, destPath);
+            }
+        }
+        catch (Renci.SshNet.Common.SshException ex)
+        {
+            // The file stays on the server and is re-read after a restart (at-least-once)
+            Context?.RaiseError?.Invoke(ex);
+            _client?.Dispose();
+            _client = null;
         }
     }
 

@@ -22,6 +22,7 @@ internal static class AzureBlobConnectorConfig
     // Sink-specific configs
     public const string TopicsConfig = "topics";
     public const string PartitionerConfig = "partitioner";
+    public const string PartitionFieldNameConfig = "partition.field.name";
     public const string FlushSizeConfig = "flush.size";
     public const string RotateIntervalMsConfig = "rotate.interval.ms";
 

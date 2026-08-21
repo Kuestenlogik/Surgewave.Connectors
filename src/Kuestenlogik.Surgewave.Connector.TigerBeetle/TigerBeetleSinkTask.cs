@@ -67,11 +67,6 @@ public sealed class TigerBeetleSinkTask : SinkTask
                         if (account.HasValue)
                         {
                             accountBatch.Add(account.Value);
-                            if (accountBatch.Count >= _batchSize)
-                            {
-                                await FlushAccountsAsync(accountBatch);
-                                accountBatch.Clear();
-                            }
                         }
                         break;
 
@@ -80,18 +75,26 @@ public sealed class TigerBeetleSinkTask : SinkTask
                         if (transfer.HasValue)
                         {
                             transferBatch.Add(transfer.Value);
-                            if (transferBatch.Count >= _batchSize)
-                            {
-                                await FlushTransfersAsync(transferBatch);
-                                transferBatch.Clear();
-                            }
                         }
                         break;
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Malformed record: surface and skip. Delivery failures below must throw.
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
+
+            if (accountBatch.Count >= _batchSize)
+            {
+                await FlushAccountsAsync(accountBatch);
+                accountBatch.Clear();
+            }
+            if (transferBatch.Count >= _batchSize)
+            {
+                await FlushTransfersAsync(transferBatch);
+                transferBatch.Clear();
             }
         }
 
@@ -213,14 +216,21 @@ public sealed class TigerBeetleSinkTask : SinkTask
     {
         if (accounts.Count == 0) return;
 
-        try
+        var results = await _client!.CreateAccountsAsync(accounts.ToArray());
+
+        // One result per event; Exists is an idempotent replay of a delivered batch, not a failure.
+        var rejected = results
+            .Select((result, index) => (result.Status, Index: index))
+            .Where(r => r.Status is not CreateAccountStatus.Created and not CreateAccountStatus.Exists)
+            .ToList();
+
+        if (rejected.Count > 0)
         {
-            var results = await _client!.CreateAccountsAsync(accounts.ToArray());
-            // Could log errors from results
-        }
-        catch (Exception)
-        {
-            // Log and continue
+            var details = string.Join("; ", rejected.Take(5).Select(r => $"{accounts[r.Index].Id}: {r.Status}"));
+            var error = new InvalidOperationException(
+                $"TigerBeetle rejected {rejected.Count} of {accounts.Count} accounts: {details}");
+            Context?.RaiseError?.Invoke(error);
+            throw error;
         }
     }
 
@@ -228,14 +238,21 @@ public sealed class TigerBeetleSinkTask : SinkTask
     {
         if (transfers.Count == 0) return;
 
-        try
+        var results = await _client!.CreateTransfersAsync(transfers.ToArray());
+
+        // One result per event; Exists is an idempotent replay of a delivered batch, not a failure.
+        var rejected = results
+            .Select((result, index) => (result.Status, Index: index))
+            .Where(r => r.Status is not CreateTransferStatus.Created and not CreateTransferStatus.Exists)
+            .ToList();
+
+        if (rejected.Count > 0)
         {
-            var results = await _client!.CreateTransfersAsync(transfers.ToArray());
-            // Could log errors from results
-        }
-        catch (Exception)
-        {
-            // Log and continue
+            var details = string.Join("; ", rejected.Take(5).Select(r => $"{transfers[r.Index].Id}: {r.Status}"));
+            var error = new InvalidOperationException(
+                $"TigerBeetle rejected {rejected.Count} of {transfers.Count} transfers: {details}");
+            Context?.RaiseError?.Invoke(error);
+            throw error;
         }
     }
 

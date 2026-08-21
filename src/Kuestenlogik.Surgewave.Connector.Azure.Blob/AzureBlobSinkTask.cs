@@ -15,6 +15,7 @@ public sealed class AzureBlobSinkTask : SinkTask
     private string _prefix = "";
     private string _format = AzureBlobConnectorConfig.DefaultFormat;
     private string _partitioner = AzureBlobConnectorConfig.DefaultPartitioner;
+    private string _partitionField = "";
     private int _flushSize = AzureBlobConnectorConfig.DefaultFlushSize;
     private long _rotateIntervalMs = AzureBlobConnectorConfig.DefaultRotateIntervalMs;
     private DateTimeOffset _lastRotateTime = DateTimeOffset.UtcNow;
@@ -34,6 +35,7 @@ public sealed class AzureBlobSinkTask : SinkTask
         _prefix = GetConfigValue(config, AzureBlobConnectorConfig.PrefixConfig, "");
         _format = GetConfigValue(config, AzureBlobConnectorConfig.FormatConfig, AzureBlobConnectorConfig.DefaultFormat);
         _partitioner = GetConfigValue(config, AzureBlobConnectorConfig.PartitionerConfig, AzureBlobConnectorConfig.DefaultPartitioner);
+        _partitionField = GetConfigValue(config, AzureBlobConnectorConfig.PartitionFieldNameConfig, "");
         _flushSize = GetConfigInt(config, AzureBlobConnectorConfig.FlushSizeConfig, AzureBlobConnectorConfig.DefaultFlushSize);
         _rotateIntervalMs = GetConfigLong(config, AzureBlobConnectorConfig.RotateIntervalMsConfig, AzureBlobConnectorConfig.DefaultRotateIntervalMs);
 
@@ -168,9 +170,51 @@ public sealed class AzureBlobSinkTask : SinkTask
         return _partitioner switch
         {
             AzureBlobConnectorConfig.PartitionerTime => $"{record.Topic}/{record.Timestamp:yyyy/MM/dd/HH}",
-            AzureBlobConnectorConfig.PartitionerField => $"{record.Topic}/{record.Partition}",
+            AzureBlobConnectorConfig.PartitionerField => $"{record.Topic}/{GetFieldPartitionValue(record)}",
             _ => $"{record.Topic}/{record.Partition}"
         };
+    }
+
+    private string GetFieldPartitionValue(SinkRecord record)
+    {
+        if (_partitionField.Length == 0)
+        {
+            return record.Partition.ToString();
+        }
+
+        if (record.Value is { Length: > 0 })
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(record.Value);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty(_partitionField, out var field) &&
+                    field.ValueKind is not (JsonValueKind.Null or JsonValueKind.Object or JsonValueKind.Array))
+                {
+                    var value = field.ValueKind == JsonValueKind.String ? field.GetString()! : field.GetRawText();
+                    if (value.Length > 0)
+                    {
+                        return $"{_partitionField}={SanitizeBlobSegment(value)}";
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Value is not JSON — fall through to the unknown bucket
+            }
+        }
+
+        return $"{_partitionField}=unknown";
+    }
+
+    private static string SanitizeBlobSegment(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            sb.Append(char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '_');
+        }
+        return sb.ToString();
     }
 
     private string GenerateBlobName(string partitionKey, SinkRecord sampleRecord)
@@ -190,6 +234,10 @@ public sealed class AzureBlobSinkTask : SinkTask
         var sb = new StringBuilder();
         foreach (var record in records)
         {
+            // Tombstones (null/empty value) carry no payload to write
+            if (record.Value is not { Length: > 0 })
+                continue;
+
             var value = Encoding.UTF8.GetString(record.Value);
             sb.AppendLine(value);
         }
@@ -198,7 +246,7 @@ public sealed class AzureBlobSinkTask : SinkTask
 
     private static byte[] SerializeJson(List<SinkRecord> records)
     {
-        var items = records.Select(r =>
+        var items = records.Where(r => r.Value is { Length: > 0 }).Select(r =>
         {
             try
             {

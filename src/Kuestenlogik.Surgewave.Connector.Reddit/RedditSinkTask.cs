@@ -11,10 +11,18 @@ namespace Kuestenlogik.Surgewave.Connector.Reddit;
 /// </summary>
 public class RedditSinkTask : SinkTask
 {
+    private static readonly TimeSpan TokenRefreshMargin = TimeSpan.FromMinutes(1);
+
     private IDictionary<string, string> _config = new Dictionary<string, string>();
 
     // Reddit client
     private RedditClient? _redditClient;
+    private string _clientId = string.Empty;
+    private string? _clientSecret;
+    private string _username = string.Empty;
+    private string _password = string.Empty;
+    private string _userAgent = string.Empty;
+    private DateTimeOffset _tokenExpiresAt = DateTimeOffset.MinValue;
 
     // Settings
     private string? _defaultSubreddit;
@@ -37,8 +45,11 @@ public class RedditSinkTask : SinkTask
     {
         _config = config;
 
-        var clientId = config[RedditConnectorConfig.ClientIdConfig];
-        var clientSecret = config.GetValueOrDefault(RedditConnectorConfig.ClientSecretConfig);
+        _clientId = config[RedditConnectorConfig.ClientIdConfig];
+        _clientSecret = config.GetValueOrDefault(RedditConnectorConfig.ClientSecretConfig);
+        _username = config[RedditConnectorConfig.UsernameConfig];
+        _password = config[RedditConnectorConfig.PasswordConfig];
+        _userAgent = config[RedditConnectorConfig.UserAgentConfig];
 
         // Subreddit settings
         config.TryGetValue(RedditConnectorConfig.DefaultSubredditConfig, out _defaultSubreddit);
@@ -80,15 +91,26 @@ public class RedditSinkTask : SinkTask
             _retryDelayMs = retryDelay;
         }
 
-        // Initialize Reddit client - Reddit.NET requires OAuth authentication for posting
-        // The refresh token should be obtained via OAuth flow
-        var refreshToken = config.GetValueOrDefault(RedditConnectorConfig.PasswordConfig);
+        // The client is created lazily in PutAsync once an access token has been
+        // obtained via the password grant; Reddit.NET does not fetch tokens itself.
+        _redditClient = null;
+        _tokenExpiresAt = DateTimeOffset.MinValue;
+    }
+
+    private async Task EnsureAuthenticatedAsync(CancellationToken cancellationToken)
+    {
+        if (_redditClient != null && DateTimeOffset.UtcNow < _tokenExpiresAt - TokenRefreshMargin)
+            return;
+
+        var (accessToken, expiresAt) = await RedditAuthenticator.FetchAccessTokenAsync(
+            _clientId, _clientSecret, _username, _password, _userAgent, cancellationToken);
 
         _redditClient = new RedditClient(
-            appId: clientId,
-            appSecret: clientSecret,
-            refreshToken: refreshToken
-        );
+            appId: _clientId,
+            appSecret: _clientSecret,
+            accessToken: accessToken,
+            userAgent: _userAgent);
+        _tokenExpiresAt = expiresAt;
     }
 
     public override void Stop()
@@ -98,8 +120,7 @@ public class RedditSinkTask : SinkTask
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
-        if (_redditClient == null)
-            throw new InvalidOperationException("Reddit client not initialized");
+        await EnsureAuthenticatedAsync(cancellationToken);
 
         foreach (var record in records)
         {

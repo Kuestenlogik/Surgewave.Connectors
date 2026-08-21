@@ -37,6 +37,7 @@ public sealed class OneDriveSourceTask : SourceTask
     private int _retryBackoffMs = OneDriveConnectorConfig.DefaultRetryBackoffMs;
 
     private string? _deltaLink;
+    private string? _resolvedDriveId;
     private DateTime _lastPoll = DateTime.MinValue;
     private bool _initialListDone;
     private bool _disposed;
@@ -186,25 +187,27 @@ public sealed class OneDriveSourceTask : SourceTask
         {
             try
             {
+                var driveId = await GetDriveIdAsync(cancellationToken);
                 DeltaGetResponse? deltaResponse;
 
                 if (_deltaLink != null)
                 {
                     // Use delta link from previous call
-                    deltaResponse = await _graphClient.Drives[GetDriveId()].Items["root"].Delta
+                    deltaResponse = await _graphClient.Drives[driveId].Items["root"].Delta
                         .WithUrl(_deltaLink)
                         .GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
                 }
                 else
                 {
                     // Initial delta query
-                    deltaResponse = await _graphClient.Drives[GetDriveId()].Items["root"].Delta
-                        .GetAsDeltaGetResponseAsync(cancellationToken: cancellationToken);
+                    deltaResponse = await _graphClient.Drives[driveId].Items["root"].Delta
+                        .GetAsDeltaGetResponseAsync(r => r.QueryParameters.Top = _batchSize, cancellationToken);
                 }
 
                 if (deltaResponse == null) break;
 
-                foreach (var item in deltaResponse.Value?.Take(_batchSize) ?? [])
+                // The delta link advances past the whole page, so every item on it must be emitted
+                foreach (var item in deltaResponse.Value ?? [])
                 {
                     if (item.Deleted != null)
                     {
@@ -239,7 +242,7 @@ public sealed class OneDriveSourceTask : SourceTask
     {
         if (_graphClient == null) return null;
 
-        var driveId = GetDriveId();
+        var driveId = await GetDriveIdAsync(cancellationToken);
 
         if (!string.IsNullOrEmpty(_folderId))
         {
@@ -261,15 +264,26 @@ public sealed class OneDriveSourceTask : SourceTask
         }
     }
 
-    private string GetDriveId()
+    private async Task<string> GetDriveIdAsync(CancellationToken cancellationToken)
     {
         // If explicit drive ID is specified, use it
         if (!string.IsNullOrEmpty(_driveId))
             return _driveId;
 
-        // Otherwise, we'll use the default "me" drive for user context
-        // Note: For app-only auth, you need to specify a drive ID
-        return _driveId ?? "me";
+        if (_resolvedDriveId != null)
+            return _resolvedDriveId;
+
+        // App-only auth has no "me" context; resolve the configured user's default drive
+        if (_graphClient == null || string.IsNullOrEmpty(_userId))
+        {
+            throw new InvalidOperationException(
+                $"Either '{OneDriveConnectorConfig.DriveIdConfig}' or '{OneDriveConnectorConfig.UserIdConfig}' must be configured to resolve the target drive.");
+        }
+
+        var drive = await _graphClient.Users[_userId].Drive.GetAsync(cancellationToken: cancellationToken);
+        _resolvedDriveId = drive?.Id
+            ?? throw new InvalidOperationException($"Could not resolve the default drive for user '{_userId}'.");
+        return _resolvedDriveId;
     }
 
     private bool MatchesPattern(string? fileName)
@@ -291,7 +305,7 @@ public sealed class OneDriveSourceTask : SourceTask
         {
             try
             {
-                var driveId = GetDriveId();
+                var driveId = await GetDriveIdAsync(cancellationToken);
                 var stream = await _graphClient.Drives[driveId].Items[item.Id].Content
                     .GetAsync(cancellationToken: cancellationToken);
 

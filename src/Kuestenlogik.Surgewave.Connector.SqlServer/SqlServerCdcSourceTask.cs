@@ -34,7 +34,13 @@ public sealed class SqlServerCdcSourceTask : SourceTask
     private bool _startFromBeginning;
 
     private byte[]? _lastLsn;
+    private bool _lastLsnInclusive;
     private bool _snapshotCompleted;
+    private SqlConnection? _snapshotConnection;
+    private SqlCommand? _snapshotCommand;
+    private SqlDataReader? _snapshotReader;
+    private List<string>? _snapshotColumns;
+    private int _snapshotTableIndex;
     private readonly Dictionary<string, string> _captureInstances = new();
     private readonly Dictionary<string, List<string>> _tableColumns = new();
 
@@ -91,6 +97,10 @@ public sealed class SqlServerCdcSourceTask : SourceTask
         if (storedOffset.TryGetValue(SqlServerConnectorConfig.OffsetLsn, out var lsnStr) && lsnStr != null)
         {
             _lastLsn = Convert.FromHexString(lsnStr.ToString()!);
+
+            // The restored LSN comes from a per-record offset: other changes of the same
+            // LSN may not have been committed yet, so the first window re-reads it
+            _lastLsnInclusive = true;
         }
 
         if (storedOffset.TryGetValue(SqlServerConnectorConfig.OffsetSnapshotCompleted, out var snapshotValue))
@@ -101,7 +111,12 @@ public sealed class SqlServerCdcSourceTask : SourceTask
 
     public override void Stop()
     {
-        // No persistent connections to clean up
+        _snapshotReader?.Dispose();
+        _snapshotReader = null;
+        _snapshotCommand?.Dispose();
+        _snapshotCommand = null;
+        _snapshotConnection?.Dispose();
+        _snapshotConnection = null;
     }
 
     protected override void Dispose(bool disposing)
@@ -139,6 +154,9 @@ public sealed class SqlServerCdcSourceTask : SourceTask
             _lastLsn = _startFromBeginning
                 ? await GetMinLsnAsync(cancellationToken)
                 : await GetMaxLsnAsync(cancellationToken);
+
+            // The minimum LSN itself still has unread changes; the maximum does not
+            _lastLsnInclusive = _startFromBeginning;
         }
 
         // Poll for CDC changes
@@ -228,30 +246,48 @@ public sealed class SqlServerCdcSourceTask : SourceTask
     {
         var records = new List<SourceRecord>();
 
-        await using var conn = new SqlConnection(_connectionString);
-        await conn.OpenAsync(cancellationToken);
-
-        foreach (var table in _tables)
+        // The snapshot streams each table exactly once, batched across polls via a
+        // reader that stays open between calls; re-running the SELECT per poll would
+        // emit the same rows forever and never reach CDC streaming.
+        if (_snapshotConnection == null)
         {
-            var (schema, tableName) = ParseTableName(table);
+            if (_snapshotTableIndex >= _tables.Length)
+                return records;
 
-#pragma warning disable CA2100 // SQL injection - table names validated
-            await using var cmd = new SqlCommand($"SELECT * FROM [{schema}].[{tableName}]", conn);
-#pragma warning restore CA2100
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            _snapshotConnection = new SqlConnection(_connectionString);
+            await _snapshotConnection.OpenAsync(cancellationToken);
 
-            var columns = new List<string>();
-            for (var i = 0; i < reader.FieldCount; i++)
+            // CDC resumes from the LSN captured before the snapshot starts, so changes
+            // made while snapshotting are replayed afterwards instead of being lost
+            _lastLsn ??= await GetMaxLsnAsync(cancellationToken);
+        }
+
+        while (records.Count < _batchMaxRecords && _snapshotTableIndex < _tables.Length)
+        {
+            var (schema, tableName) = ParseTableName(_tables[_snapshotTableIndex]);
+
+            if (_snapshotReader == null)
             {
-                columns.Add(reader.GetName(i));
+#pragma warning disable CA2100 // SQL injection - table names validated
+                _snapshotCommand = new SqlCommand($"SELECT * FROM [{schema}].[{tableName}]", _snapshotConnection);
+#pragma warning restore CA2100
+                _snapshotReader = await _snapshotCommand.ExecuteReaderAsync(cancellationToken);
+
+                _snapshotColumns = new List<string>();
+                for (var i = 0; i < _snapshotReader.FieldCount; i++)
+                {
+                    _snapshotColumns.Add(_snapshotReader.GetName(i));
+                }
             }
 
-            while (await reader.ReadAsync(cancellationToken))
+            var columns = _snapshotColumns!;
+
+            while (records.Count < _batchMaxRecords && await _snapshotReader.ReadAsync(cancellationToken))
             {
                 var row = new Dictionary<string, object?>();
-                for (var i = 0; i < reader.FieldCount; i++)
+                for (var i = 0; i < _snapshotReader.FieldCount; i++)
                 {
-                    row[columns[i]] = reader.IsDBNull(i) ? null : ConvertValue(reader.GetValue(i));
+                    row[columns[i]] = _snapshotReader.IsDBNull(i) ? null : ConvertValue(_snapshotReader.GetValue(i));
                 }
 
                 var payload = new Dictionary<string, object?>
@@ -288,9 +324,29 @@ public sealed class SqlServerCdcSourceTask : SourceTask
                         ["sqlserver.op"] = Encoding.UTF8.GetBytes("r")
                     }
                 });
+            }
 
-                if (records.Count >= _batchMaxRecords)
-                    return records;
+            if (records.Count < _batchMaxRecords)
+            {
+                // Table exhausted - move to the next one
+                await _snapshotReader.DisposeAsync();
+                _snapshotReader = null;
+                await _snapshotCommand!.DisposeAsync();
+                _snapshotCommand = null;
+                _snapshotColumns = null;
+                _snapshotTableIndex++;
+            }
+        }
+
+        if (_snapshotTableIndex >= _tables.Length)
+        {
+            await _snapshotConnection.DisposeAsync();
+            _snapshotConnection = null;
+
+            // Mark the final record so a restart after full commit skips the snapshot
+            if (records.Count > 0)
+            {
+                records[^1].SourceOffset[SqlServerConnectorConfig.OffsetSnapshotCompleted] = "true";
             }
         }
 
@@ -308,7 +364,30 @@ public sealed class SqlServerCdcSourceTask : SourceTask
         var maxLsn = await GetMaxLsnAsync(cancellationToken);
 
         // Skip if no new changes
-        if (_lastLsn != null && CompareLsn(_lastLsn, maxLsn) >= 0)
+        if (_lastLsn != null && !_lastLsnInclusive && CompareLsn(_lastLsn, maxLsn) >= 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(_pollIntervalMs), cancellationToken);
+            return records;
+        }
+
+        var fromLsn = _lastLsnInclusive
+            ? _lastLsn!
+            : await GetIncrementedLsnAsync(conn, _lastLsn!, cancellationToken);
+
+        // Cap the batch by shrinking the LSN window, not by truncating the record
+        // list: the cursor may only advance past LSNs whose changes were all read,
+        // otherwise the remaining changes in the window would be skipped forever
+        var toLsn = maxLsn;
+        foreach (var captureInstance in _captureInstances.Values)
+        {
+            var cutoff = await GetBatchEndLsnAsync(conn, captureInstance, fromLsn, maxLsn, cancellationToken);
+            if (cutoff != null && CompareLsn(cutoff, toLsn) < 0)
+            {
+                toLsn = cutoff;
+            }
+        }
+
+        if (CompareLsn(fromLsn, toLsn) > 0)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(_pollIntervalMs), cancellationToken);
             return records;
@@ -327,21 +406,48 @@ public sealed class SqlServerCdcSourceTask : SourceTask
 
             // Query CDC changes for this table
             var tableRecords = await QueryCdcChangesAsync(
-                conn, schema, tableName, captureInstance, columns, _lastLsn!, maxLsn, cancellationToken);
+                conn, schema, tableName, captureInstance, columns, fromLsn, toLsn, cancellationToken);
 
             records.AddRange(tableRecords);
-
-            if (records.Count >= _batchMaxRecords)
-                break;
         }
 
-        // Update last LSN if we got any records
-        if (records.Count > 0)
-        {
-            _lastLsn = maxLsn;
-        }
+        // The whole [fromLsn, toLsn] window was read for every table
+        _lastLsn = toLsn;
+        _lastLsnInclusive = false;
 
         return records;
+    }
+
+    private static async Task<byte[]> GetIncrementedLsnAsync(SqlConnection conn, byte[] lsn, CancellationToken cancellationToken)
+    {
+        await using var cmd = new SqlCommand("SELECT sys.fn_cdc_increment_lsn(@lsn)", conn);
+        cmd.Parameters.AddWithValue("@lsn", lsn);
+        return await cmd.ExecuteScalarAsync(cancellationToken) as byte[] ?? lsn;
+    }
+
+    private async Task<byte[]?> GetBatchEndLsnAsync(
+        SqlConnection conn,
+        string captureInstance,
+        byte[] fromLsn,
+        byte[] toLsn,
+        CancellationToken cancellationToken)
+    {
+        // LSN of the first change beyond the batch cap, if any. Reading up to and
+        // including it keeps batches near the cap while never splitting one LSN.
+        var sql = $@"
+            SELECT __$start_lsn
+            FROM cdc.fn_cdc_get_all_changes_{captureInstance}(@from_lsn, @to_lsn, 'all update old')
+            ORDER BY __$start_lsn, __$seqval
+            OFFSET @batch_max ROWS FETCH NEXT 1 ROWS ONLY";
+
+#pragma warning disable CA2100 // Capture instance validated from cdc.change_tables
+        await using var cmd = new SqlCommand(sql, conn);
+#pragma warning restore CA2100
+        cmd.Parameters.AddWithValue("@from_lsn", fromLsn);
+        cmd.Parameters.AddWithValue("@to_lsn", toLsn);
+        cmd.Parameters.AddWithValue("@batch_max", _batchMaxRecords);
+
+        return await cmd.ExecuteScalarAsync(cancellationToken) as byte[];
     }
 
     private async Task<List<SourceRecord>> QueryCdcChangesAsync(
@@ -417,8 +523,6 @@ public sealed class SqlServerCdcSourceTask : SourceTask
             if (record != null)
             {
                 records.Add(record);
-                if (records.Count >= _batchMaxRecords)
-                    break;
             }
         }
 

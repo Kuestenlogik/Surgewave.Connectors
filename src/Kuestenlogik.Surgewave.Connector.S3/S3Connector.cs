@@ -112,6 +112,7 @@ public sealed class S3SourceTask : SourceTask
     private string _lastProcessedKey = "";
     private DateTimeOffset _lastModifiedTime = DateTimeOffset.MinValue;
     private readonly HashSet<string> _processedKeys = new();
+    private readonly Dictionary<string, int> _uncommittedRecordsPerKey = new();
     private AmazonS3Client? _s3Client;
 
     public override void Start(IDictionary<string, string> config)
@@ -203,17 +204,28 @@ public sealed class S3SourceTask : SourceTask
 
         var records = new List<SourceRecord>();
 
-        // List objects in bucket
+        // List the full prefix: S3 returns keys in lexicographic order while processing
+        // advances by LastModified, so a key-based cursor (StartAfter) would permanently
+        // skip new objects whose keys sort before the last processed one.
         var listRequest = new ListObjectsV2Request
         {
             BucketName = _bucket,
-            Prefix = _prefix,
-            StartAfter = _lastProcessedKey
+            Prefix = _prefix
         };
 
-        var response = await _s3Client.ListObjectsV2Async(listRequest, cancellationToken);
+        var s3Objects = new List<S3Object>();
+        ListObjectsV2Response response;
+        do
+        {
+            response = await _s3Client.ListObjectsV2Async(listRequest, cancellationToken);
+            if (response.S3Objects != null)
+            {
+                s3Objects.AddRange(response.S3Objects);
+            }
+            listRequest.ContinuationToken = response.NextContinuationToken;
+        } while (response.IsTruncated == true);
 
-        foreach (var s3Object in response.S3Objects.OrderBy(o => o.LastModified))
+        foreach (var s3Object in s3Objects.OrderBy(o => o.LastModified))
         {
             // Skip already processed objects
             if (_processedKeys.Contains(s3Object.Key))
@@ -234,8 +246,8 @@ public sealed class S3SourceTask : SourceTask
             using var reader = new StreamReader(getResponse.ResponseStream);
             var content = await reader.ReadToEndAsync(cancellationToken);
 
-            var parsedRecords = ParseContent(s3Object.Key, content);
-            records.AddRange(parsedRecords);
+            var countBefore = records.Count;
+            records.AddRange(ParseContent(s3Object.Key, content));
 
             // Track processed key
             _lastProcessedKey = s3Object.Key;
@@ -244,14 +256,42 @@ public sealed class S3SourceTask : SourceTask
                 : DateTimeOffset.UtcNow;
             _processedKeys.Add(s3Object.Key);
 
-            // Delete if configured
+            // Deleting here would destroy the object before its records are durable.
+            // Count the records instead; CommitRecord counts them down and CommitAsync
+            // deletes once every record of the object has been produced.
             if (_deleteAfterRead)
             {
-                await _s3Client.DeleteObjectAsync(_bucket, s3Object.Key, cancellationToken);
+                _uncommittedRecordsPerKey[s3Object.Key] = records.Count - countBefore;
             }
         }
 
         return records;
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (!_deleteAfterRead || record.Key == null) return;
+
+        var objectKey = Encoding.UTF8.GetString(record.Key);
+        if (_uncommittedRecordsPerKey.TryGetValue(objectKey, out var remaining))
+        {
+            _uncommittedRecordsPerKey[objectKey] = remaining - 1;
+        }
+    }
+
+    public override async Task CommitAsync(CancellationToken cancellationToken)
+    {
+        if (!_deleteAfterRead || _s3Client == null) return;
+
+        foreach (var (objectKey, remaining) in _uncommittedRecordsPerKey.ToList())
+        {
+            // A positive count means a record of this object was never produced
+            // (e.g. it was dead-lettered) — keep the object so no data is destroyed.
+            if (remaining > 0) continue;
+
+            await _s3Client.DeleteObjectAsync(_bucket, objectKey, cancellationToken);
+            _uncommittedRecordsPerKey.Remove(objectKey);
+        }
     }
 
     private IEnumerable<SourceRecord> ParseContent(string objectKey, string content)

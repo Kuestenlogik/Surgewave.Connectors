@@ -43,9 +43,11 @@ public sealed class RedisListSinkTask : SinkTask
                     await _db!.ListRightPushAsync(_key, record.Value);
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Surface the failure so the worker retries and does not commit the offset
+                Context.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

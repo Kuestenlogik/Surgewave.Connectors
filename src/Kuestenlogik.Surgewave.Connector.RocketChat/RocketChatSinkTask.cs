@@ -70,9 +70,13 @@ public sealed class RocketChatSinkTask : SinkTask
                 using var content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
 
                 using var response = await _httpClient.PostAsync(new Uri("/api/v1/chat.postMessage", UriKind.Relative), content, cancellationToken);
+                response.EnsureSuccessStatusCode();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                // Surface the failure so the worker retries and does not commit the offset
+                Context.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

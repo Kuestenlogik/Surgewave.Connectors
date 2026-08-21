@@ -33,11 +33,14 @@ public sealed class DynamoDbSourceTask : SourceTask
     private bool _startFromBeginning;
     private bool _includeMetadata = true;
 
+    private static readonly TimeSpan ShardDiscoveryInterval = TimeSpan.FromMinutes(1);
+
     private readonly Dictionary<string, string> _shardIterators = new();
     private readonly Dictionary<string, string> _lastSequenceNumbers = new();
     private readonly HashSet<string> _completedShards = new();
     private readonly Dictionary<string, object> _sourcePartition = new();
     private bool _shardsInitialized;
+    private DateTime _lastShardDiscovery = DateTime.MinValue;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -136,11 +139,14 @@ public sealed class DynamoDbSourceTask : SourceTask
         if (_streamsClient == null)
             return [];
 
-        // Initialize shards on first poll
-        if (!_shardsInitialized)
+        // Initialize shards on first poll and re-discover periodically:
+        // DynamoDB rolls shards over roughly every four hours, so child shards
+        // must be picked up or the source stops producing changes.
+        if (!_shardsInitialized || DateTime.UtcNow - _lastShardDiscovery >= ShardDiscoveryInterval)
         {
             await InitializeShardsAsync(cancellationToken);
             _shardsInitialized = true;
+            _lastShardDiscovery = DateTime.UtcNow;
         }
 
         var records = new List<SourceRecord>();
@@ -174,11 +180,14 @@ public sealed class DynamoDbSourceTask : SourceTask
 
         foreach (var shard in response.StreamDescription.Shards)
         {
-            await InitializeShardIteratorAsync(shard.ShardId, cancellationToken);
+            if (_shardIterators.ContainsKey(shard.ShardId) || _completedShards.Contains(shard.ShardId))
+                continue;
+
+            await InitializeShardIteratorAsync(shard.ShardId, discoveredAfterStart: _shardsInitialized, cancellationToken);
         }
     }
 
-    private async Task InitializeShardIteratorAsync(string shardId, CancellationToken cancellationToken)
+    private async Task InitializeShardIteratorAsync(string shardId, bool discoveredAfterStart, CancellationToken cancellationToken)
     {
         var request = new GetShardIteratorRequest
         {
@@ -191,6 +200,12 @@ public sealed class DynamoDbSourceTask : SourceTask
         {
             request.ShardIteratorType = ShardIteratorType.AFTER_SEQUENCE_NUMBER;
             request.SequenceNumber = sequenceNumber;
+        }
+        else if (discoveredAfterStart)
+        {
+            // A child shard from a rollover: read it from the start so records
+            // written between rollover and discovery are not skipped.
+            request.ShardIteratorType = ShardIteratorType.TRIM_HORIZON;
         }
         else
         {
@@ -250,7 +265,7 @@ public sealed class DynamoDbSourceTask : SourceTask
         catch (ExpiredIteratorException)
         {
             // Re-initialize the iterator
-            await InitializeShardIteratorAsync(shardId, cancellationToken);
+            await InitializeShardIteratorAsync(shardId, discoveredAfterStart: false, cancellationToken);
         }
 
         return records;
@@ -301,11 +316,15 @@ public sealed class DynamoDbSourceTask : SourceTask
                 : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
 
-        // Build offset
-        var offset = new Dictionary<string, object>
+        // Build offset. All shards share one source partition and the offset
+        // store replaces the whole map per partition, so every record must
+        // carry the position of every shard, not just its own.
+        var offset = new Dictionary<string, object>(_lastSequenceNumbers.Count + 1);
+        foreach (var kvp in _lastSequenceNumbers)
         {
-            [$"shard:{shardId}"] = record.Dynamodb.SequenceNumber
-        };
+            offset[$"shard:{kvp.Key}"] = kvp.Value;
+        }
+        offset[$"shard:{shardId}"] = record.Dynamodb.SequenceNumber;
 
         return new SourceRecord
         {

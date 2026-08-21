@@ -84,9 +84,11 @@ public sealed class NeptuneSourceTask : SourceTask
                 });
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Rethrow so a failing endpoint/query is distinguishable from an idle source.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
 
         return records;

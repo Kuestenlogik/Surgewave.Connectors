@@ -177,9 +177,17 @@ public sealed class KinesisSourceTask : SourceTask
 
             foreach (var shard in response.Shards)
             {
-                // Skip closed shards (ended shards have EndingSequenceNumber set)
-                if (shard.SequenceNumberRange.EndingSequenceNumber != null)
+                // A closed shard (EndingSequenceNumber set) may still hold unread
+                // records within retention after a reshard. Skip it only when
+                // starting fresh from LATEST, where its records are out of scope.
+                var isClosed = shard.SequenceNumberRange.EndingSequenceNumber != null;
+                if (isClosed
+                    && !_lastSequenceNumbers.ContainsKey(shard.ShardId)
+                    && !_startTimestamp.HasValue
+                    && _shardIteratorType != KinesisConnectorConfig.ShardIteratorTrimHorizon)
+                {
                     continue;
+                }
 
                 await InitializeShardIteratorAsync(shard.ShardId, cancellationToken);
             }
@@ -316,11 +324,15 @@ public sealed class KinesisSourceTask : SourceTask
             }
         }
 
-        // Build offset
-        var offset = new Dictionary<string, object>
+        // Build offset. All shards share one source partition and the offset
+        // store replaces the whole map per partition, so every record must
+        // carry the position of every shard, not just its own.
+        var offset = new Dictionary<string, object>(_lastSequenceNumbers.Count + 1);
+        foreach (var kvp in _lastSequenceNumbers)
         {
-            [$"shard:{shardId}"] = record.SequenceNumber
-        };
+            offset[$"shard:{kvp.Key}"] = kvp.Value;
+        }
+        offset[$"shard:{shardId}"] = record.SequenceNumber;
 
         return new SourceRecord
         {
