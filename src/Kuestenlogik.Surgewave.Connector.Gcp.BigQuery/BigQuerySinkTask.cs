@@ -67,12 +67,16 @@ public sealed class BigQuerySinkTask : SinkTask
 
         if (!string.IsNullOrEmpty(credentialsJson))
         {
+            #pragma warning disable CS0618 // FromJson/FromFile: operator-supplied credentials, not untrusted input
             var credential = GoogleCredential.FromJson(credentialsJson);
+            #pragma warning restore CS0618
             return BigQueryClient.Create(projectId, credential);
         }
         else if (!string.IsNullOrEmpty(credentialsFile))
         {
+            #pragma warning disable CS0618 // FromJson/FromFile: operator-supplied credentials, not untrusted input
             var credential = GoogleCredential.FromFile(credentialsFile);
+            #pragma warning restore CS0618
             return BigQueryClient.Create(projectId, credential);
         }
         else

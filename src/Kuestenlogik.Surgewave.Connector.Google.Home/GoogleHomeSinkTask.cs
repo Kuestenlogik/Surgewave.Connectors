@@ -31,12 +31,16 @@ public sealed class GoogleHomeSinkTask : SinkTask
 
         if (!string.IsNullOrWhiteSpace(jsonCredentials))
         {
+            #pragma warning disable CS0618 // FromJson/FromFile: operator-supplied credentials, not untrusted input
             credential = GoogleCredential.FromJson(jsonCredentials)
+            #pragma warning restore CS0618
                 .CreateScoped("https://www.googleapis.com/auth/homegraph");
         }
         else
         {
+            #pragma warning disable CS0618 // FromJson/FromFile: operator-supplied credentials, not untrusted input
             credential = GoogleCredential.FromFile(fileCredentials!)
+            #pragma warning restore CS0618
                 .CreateScoped("https://www.googleapis.com/auth/homegraph");
         }
 

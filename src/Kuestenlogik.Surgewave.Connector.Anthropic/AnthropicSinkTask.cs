@@ -47,7 +47,7 @@ public sealed class AnthropicSinkTask : SinkTask
             throw new ArgumentException($"Missing required config: {AnthropicConnectorConfig.ApiKeyConfig}");
 
         // Create client with API key
-        _client = new AnthropicClient { APIKey = apiKey };
+        _client = new AnthropicClient { ApiKey = apiKey };
 
         // Apply custom base URL if specified
         if (config.TryGetValue(AnthropicConnectorConfig.BaseUrlConfig, out var baseUrl) && !string.IsNullOrEmpty(baseUrl))
@@ -199,9 +199,14 @@ public sealed class AnthropicSinkTask : SinkTask
                                 }
                             ],
                             Model = _model,
+                            // Deliberately still forwarded: models up to Claude Opus 4.6
+                            // accept these sampling knobs, and the connector config
+                            // exposes them for exactly those models.
+#pragma warning disable CS0618
                             Temperature = _temperature,
                             TopP = _topP,
                             TopK = _topK > 0 ? _topK : null,
+#pragma warning restore CS0618
                         };
 
                         // Add system prompt if specified

@@ -219,9 +219,7 @@ public sealed class ICalSourceTask : SourceTask
             ["priority"] = evt.Priority,
             ["organizer"] = evt.Organizer?.Value?.ToString(),
             ["categories"] = evt.Categories?.Count > 0 ? string.Join(",", evt.Categories) : null,
-            ["recurrenceRule"] = evt.RecurrenceRules?.Count > 0
-                ? evt.RecurrenceRules[0]?.ToString()
-                : null
+            ["recurrenceRule"] = evt.RecurrenceRule?.ToString()
         };
 
         // Add attendees
