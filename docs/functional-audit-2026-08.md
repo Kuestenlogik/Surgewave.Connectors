@@ -1,8 +1,16 @@
 Full-repo functional audit (2026-08-21, 15 parallel review agents over all 118 connectors).
 
-**Summary**: 26 functional / 57 incomplete / 33 broken / 2 skeleton. 174 bug-severity findings, 27 stubs. Test quality: 18 behavioral / 55 config-only / 45 none.
+> **Status: worked off.** This document records the audit as it was taken; it is not a
+> current defect list. Every bug-severity finding below has since been repaired
+> (v0.3.0 for the 33 broken connectors, v0.4.0 for the 59 incomplete/skeleton ones —
+> see Connectors#13). Where a finding could not be implemented honestly (a missing
+> licensed driver, a query-topic consumer a Connect source task cannot have), the
+> connector now fails loudly or documents the real contract instead of pretending.
+> Keep this file as the baseline for the next audit.
 
-The 33 broken connectors' bug-severity findings are being fixed in the follow-up commits on this issue. Recurring systemic patterns: (a) `catch (Exception) {}` per record with no logging — failures acked, offsets committed, worker retry/DLQ bypassed; (b) buffered sinks without a FlushAsync override — offsets commit while records sit in memory; (c) CDC initial snapshots that never complete for non-empty tables (MySql/Oracle/PostgreSql/SqlServer share the pattern); (d) delete/move-after-read executed before the record is durably produced.
+**Summary as audited**: 26 functional / 57 incomplete / 33 broken / 2 skeleton. 174 bug-severity findings, 27 stubs. Test quality: 18 behavioral / 55 config-only / 45 none.
+
+Recurring systemic patterns: (a) `catch (Exception) {}` per record with no logging — failures acked, offsets committed, worker retry/DLQ bypassed; (b) buffered sinks without a FlushAsync override — offsets commit while records sit in memory; (c) CDC initial snapshots that never complete for non-empty tables (MySql/Oracle/PostgreSql/SqlServer share the pattern); (d) delete/move-after-read executed before the record is durably produced; (e) cursors held only in memory, so a restart re-reads the whole source.
 
 
 ## broken (33)
