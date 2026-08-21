@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Ical.Net;
 using Ical.Net.CalendarComponents;
+using Calendar = Ical.Net.Calendar;
 using Kuestenlogik.Surgewave.Connect;
 
 namespace Kuestenlogik.Surgewave.Connector.ICal;
@@ -31,8 +33,13 @@ public sealed class ICalSourceTask : SourceTask
     private int _timeWindowDays = ICalConnectorConfig.DefaultTimeWindowDays;
     private HttpClient? _httpClient;
     private DateTimeOffset _lastPollTime = DateTimeOffset.MinValue;
+    private long _lastEventStampMs;
     private readonly HashSet<string> _emittedEventUids = [];
+    private readonly Queue<string> _emittedEventOrder = new();
     private readonly Dictionary<string, object> _sourcePartition = [];
+
+    /// <summary>Upper bound for the in-memory dedup set so a long-lived feed cannot grow it forever.</summary>
+    private const int MaxTrackedEventKeys = 5000;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -91,11 +98,22 @@ public sealed class ICalSourceTask : SourceTask
         }
 
         // Restore offset
-        var storedOffset = Context.OffsetStorageReader?.Offset(_sourcePartition);
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
         if (storedOffset != null)
         {
             if (storedOffset.TryGetValue(ICalConnectorConfig.OffsetLastPoll, out var lastPoll))
-                _lastPollTime = DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(lastPoll));
+                _lastPollTime = DateTimeOffset.FromUnixTimeMilliseconds(Convert.ToInt64(lastPoll, CultureInfo.InvariantCulture));
+
+            // Without the change watermark and the last committed event key, every restart
+            // would re-emit the whole time window as duplicates.
+            if (storedOffset.TryGetValue(ICalConnectorConfig.OffsetLastModified, out var lastModified))
+                _lastEventStampMs = Convert.ToInt64(lastModified, CultureInfo.InvariantCulture);
+
+            if (storedOffset.TryGetValue(ICalConnectorConfig.OffsetLastEventUid, out var lastEventUid) &&
+                lastEventUid?.ToString() is { Length: > 0 } lastEventKey)
+            {
+                TrackEmitted(lastEventKey);
+            }
         }
     }
 
@@ -153,6 +171,8 @@ public sealed class ICalSourceTask : SourceTask
             var windowStart = _includePastEvents ? DateTime.MinValue : DateTime.UtcNow;
             var windowEnd = DateTime.UtcNow.AddDays(_timeWindowDays);
 
+            var candidates = new List<(CalendarEvent Event, string Key, long StampMs)>();
+
             foreach (var evt in calendar.Events)
             {
                 // Skip if already emitted (for incremental polling)
@@ -172,33 +192,82 @@ public sealed class ICalSourceTask : SourceTask
                 if (eventStart > windowEnd)
                     continue;
 
-                var record = CreateEventRecord(evt, eventKey);
-                records.Add(record);
-                _emittedEventUids.Add(eventKey);
+                // The persisted watermark is the change stamp of the last committed event;
+                // anything strictly older than it was already emitted before the restart.
+                var stampMs = ChangeStampMs(evt);
+                if (stampMs < _lastEventStampMs)
+                    continue;
+
+                candidates.Add((evt, eventKey, stampMs));
+            }
+
+            // Emit the oldest change first so the committed watermark never moves backwards.
+            candidates.Sort(static (left, right) => left.StampMs.CompareTo(right.StampMs));
+
+            foreach (var (evt, eventKey, stampMs) in candidates)
+            {
+                records.Add(CreateEventRecord(evt, eventKey, stampMs));
+                TrackEmitted(eventKey);
+
+                if (stampMs > _lastEventStampMs)
+                    _lastEventStampMs = stampMs;
             }
 
             _lastPollTime = DateTimeOffset.UtcNow;
             return records;
         }
-        catch (HttpRequestException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            throw;
+        }
+        catch (HttpRequestException ex)
+        {
+            Context?.RaiseError?.Invoke(ex);
             await Task.Delay(5000, cancellationToken);
             return [];
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            Context?.RaiseError?.Invoke(ex);
             await Task.Delay(5000, cancellationToken);
             return [];
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Calendar parsing error
+            // Calendar parsing error - surface it, a permanently malformed feed must not
+            // fail silently forever.
+            Context?.RaiseError?.Invoke(ex);
             _lastPollTime = DateTimeOffset.UtcNow;
             return [];
         }
     }
 
-    private SourceRecord CreateEventRecord(CalendarEvent evt, string eventKey)
+    /// <summary>
+    /// The change stamp an event is ordered and deduplicated by across restarts.
+    /// </summary>
+    private static long ChangeStampMs(CalendarEvent evt)
+    {
+        var stamp = evt.LastModified?.Value ?? evt.Created?.Value ?? evt.DtStart?.Value;
+
+        return stamp.HasValue
+            ? new DateTimeOffset(DateTime.SpecifyKind(stamp.Value, DateTimeKind.Utc)).ToUnixTimeMilliseconds()
+            : 0;
+    }
+
+    private void TrackEmitted(string eventKey)
+    {
+        if (!_emittedEventUids.Add(eventKey))
+            return;
+
+        _emittedEventOrder.Enqueue(eventKey);
+
+        while (_emittedEventOrder.Count > MaxTrackedEventKeys)
+        {
+            _emittedEventUids.Remove(_emittedEventOrder.Dequeue());
+        }
+    }
+
+    private SourceRecord CreateEventRecord(CalendarEvent evt, string eventKey, long stampMs)
     {
         var eventData = new Dictionary<string, object?>
         {
@@ -241,7 +310,8 @@ public sealed class ICalSourceTask : SourceTask
         var offset = new Dictionary<string, object>
         {
             [ICalConnectorConfig.OffsetLastPoll] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            [ICalConnectorConfig.OffsetLastEventUid] = eventKey
+            [ICalConnectorConfig.OffsetLastEventUid] = eventKey,
+            [ICalConnectorConfig.OffsetLastModified] = stampMs
         };
 
         return new SourceRecord

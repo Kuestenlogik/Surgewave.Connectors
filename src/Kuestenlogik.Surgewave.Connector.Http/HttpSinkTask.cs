@@ -116,6 +116,12 @@ public sealed class HttpSinkTask : SinkTask
     private async Task SendSingleAsync(SinkRecord record, CancellationToken cancellationToken)
     {
         var body = record.Value;
+
+        // Tombstone (null value): there is no body to send, so skip it instead of
+        // failing the whole batch with an ArgumentNullException.
+        if (body == null)
+            return;
+
         await SendWithRetryAsync(body, cancellationToken);
     }
 
@@ -126,6 +132,10 @@ public sealed class HttpSinkTask : SinkTask
 
         foreach (var record in records)
         {
+            // Tombstone (null value): nothing to serialize into the array
+            if (record.Value == null)
+                continue;
+
             var content = Encoding.UTF8.GetString(record.Value);
             try
             {
@@ -139,6 +149,9 @@ public sealed class HttpSinkTask : SinkTask
                 jsonElements.Add(stringDoc.RootElement.Clone());
             }
         }
+
+        if (jsonElements.Count == 0)
+            return;
 
         var batchJson = JsonSerializer.Serialize(jsonElements);
         var body = Encoding.UTF8.GetBytes(batchJson);

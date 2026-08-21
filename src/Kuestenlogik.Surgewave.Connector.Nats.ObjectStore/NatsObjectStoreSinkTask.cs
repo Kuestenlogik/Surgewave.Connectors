@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
@@ -15,22 +16,27 @@ public sealed class NatsObjectStoreSinkTask : SinkTask
 {
     private NatsConnection? _connection;
     private INatsObjStore? _objectStore;
+    private string _bucketName = null!;
+    private bool _createBucket;
     private string _objectNameField = null!;
     private string? _objectNamePrefix;
     private string? _contentType;
-    private bool _isInitialized;
+    private int _chunkSize;
 
     public override string Version => "1.0.0";
 
     public override void Start(IDictionary<string, string> config)
     {
-        var bucketName = config[NatsObjectStoreConnectorConfig.BucketName];
+        _bucketName = config[NatsObjectStoreConnectorConfig.BucketName];
         var servers = config.TryGetValue(NatsObjectStoreConnectorConfig.Servers, out var srvs)
             ? srvs : NatsObjectStoreConnectorConfig.DefaultServer;
-        var createBucket = (config.TryGetValue(NatsObjectStoreConnectorConfig.CreateBucket, out var createBkt) ? createBkt : "true") == "true";
+        _createBucket = (config.TryGetValue(NatsObjectStoreConnectorConfig.CreateBucket, out var createBkt) ? createBkt : "true") == "true";
         _objectNameField = config.TryGetValue(NatsObjectStoreConnectorConfig.ObjectNameField, out var objNameField) ? objNameField : "name";
         _objectNamePrefix = config.TryGetValue(NatsObjectStoreConnectorConfig.ObjectNamePrefix, out var objNamePrefix) ? objNamePrefix : null;
         _contentType = config.TryGetValue(NatsObjectStoreConnectorConfig.ContentType, out var contentType) ? contentType : null;
+        _chunkSize = config.TryGetValue(NatsObjectStoreConnectorConfig.ChunkSize, out var chunkSize) && !string.IsNullOrWhiteSpace(chunkSize)
+            ? int.Parse(chunkSize, CultureInfo.InvariantCulture)
+            : NatsObjectStoreConnectorConfig.DefaultChunkSize;
 
         // Build connection options
         var opts = new NatsOpts
@@ -52,48 +58,39 @@ public sealed class NatsObjectStoreSinkTask : SinkTask
         }
 
         _connection = new NatsConnection(opts);
-
-        // Initialize asynchronously
-        _ = InitializeAsync(bucketName, createBucket);
     }
 
-    private async Task InitializeAsync(string bucketName, bool createBucket)
+    /// <summary>
+    /// Connects and resolves the bucket on first use. Failures propagate to the caller
+    /// so the batch is retried instead of being dropped, and the next put retries setup.
+    /// </summary>
+    private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
-        try
-        {
-            await _connection!.ConnectAsync();
+        if (_objectStore != null) return;
 
-            var js = new NatsJSContext(_connection);
-            var objContext = new NatsObjContext(js);
+        await _connection!.ConnectAsync();
 
-            if (createBucket)
-            {
-                _objectStore = await objContext.CreateObjectStoreAsync(new NatsObjConfig(bucketName));
-            }
-            else
-            {
-                _objectStore = await objContext.GetObjectStoreAsync(bucketName);
-            }
+        var js = new NatsJSContext(_connection);
+        var objContext = new NatsObjContext(js);
 
-            _isInitialized = true;
-        }
-        catch (Exception)
-        {
-            // Log and continue - will retry on put
-        }
+        _objectStore = _createBucket
+            ? await objContext.CreateObjectStoreAsync(new NatsObjConfig(_bucketName), cancellationToken)
+            : await objContext.GetObjectStoreAsync(_bucketName, cancellationToken);
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
-        // Wait for initialization
-        var retries = 0;
-        while (!_isInitialized && retries < 50)
+        try
         {
-            await Task.Delay(100, cancellationToken);
-            retries++;
+            await EnsureInitializedAsync(cancellationToken);
         }
-
-        if (!_isInitialized) return;
+        catch (Exception ex)
+        {
+            // Connection/bucket setup failed: fail the batch instead of discarding it
+            // while the worker advances the consumer offsets past these records.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
+        }
 
         foreach (var record in records)
         {
@@ -192,12 +189,20 @@ public sealed class NatsObjectStoreSinkTask : SinkTask
                         putOpts.Headers = new Dictionary<string, string[]> { ["Content-Type"] = [_contentType] };
                     }
 
+                    if (_chunkSize > 0)
+                    {
+                        putOpts.Options = new MetaDataOptions { MaxChunkSize = _chunkSize };
+                    }
+
                     await _objectStore!.PutAsync(putOpts, stream, cancellationToken: cancellationToken);
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Never swallow a failed object write: the worker would commit offsets
+                // for records that never reached the bucket.
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

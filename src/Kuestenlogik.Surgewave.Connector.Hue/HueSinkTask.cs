@@ -91,9 +91,22 @@ public sealed class HueSinkTask : SinkTask
                     await _client!.SendCommandAsync(command, [targetId]);
                 }
             }
-            catch (Exception)
+            catch (OperationCanceledException)
             {
-                // Log and continue
+                throw;
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+            {
+                // Poison record (unparseable or malformed command payload): skip it, but
+                // surface it instead of silently dropping the record.
+                Context?.RaiseError?.Invoke(ex);
+            }
+            catch (Exception ex)
+            {
+                // Bridge failure: surface and rethrow so the worker retries/DLQs the record
+                // instead of committing the offset for a command that never ran.
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

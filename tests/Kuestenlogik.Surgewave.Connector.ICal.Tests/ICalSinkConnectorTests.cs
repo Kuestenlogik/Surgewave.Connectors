@@ -151,11 +151,40 @@ public class ICalSinkConnectorTests
         var connector = new ICalSinkConnector();
         var config = new Dictionary<string, string>
         {
-            [ICalConnectorConfig.TopicsConfig] = "events"
+            [ICalConnectorConfig.TopicsConfig] = "events",
+            [ICalConnectorConfig.OutputTopicConfig] = "calendar.ics"
         };
 
         var exception = Record.Exception(() => connector.Start(config));
         Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Start_ThrowsWhenRecordModeWithoutOutputTopic()
+    {
+        var connector = new ICalSinkConnector();
+        var config = new Dictionary<string, string>
+        {
+            [ICalConnectorConfig.TopicsConfig] = "events",
+            [ICalConnectorConfig.OutputModeConfig] = ICalConnectorConfig.OutputModeRecord
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
+        Assert.Contains(ICalConnectorConfig.OutputTopicConfig, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Start_ThrowsOnUnknownOutputMode()
+    {
+        var connector = new ICalSinkConnector();
+        var config = new Dictionary<string, string>
+        {
+            [ICalConnectorConfig.TopicsConfig] = "events",
+            [ICalConnectorConfig.OutputModeConfig] = "carrier-pigeon"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
+        Assert.Contains(ICalConnectorConfig.OutputModeConfig, ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -179,7 +208,8 @@ public class ICalSinkConnectorTests
         var connector = new ICalSinkConnector();
         var config = new Dictionary<string, string>
         {
-            [ICalConnectorConfig.TopicsConfig] = "events"
+            [ICalConnectorConfig.TopicsConfig] = "events",
+            [ICalConnectorConfig.OutputTopicConfig] = "calendar.ics"
         };
 
         connector.Start(config);
@@ -195,7 +225,8 @@ public class ICalSinkConnectorTests
         var connector = new ICalSinkConnector();
         var config = new Dictionary<string, string>
         {
-            [ICalConnectorConfig.TopicsConfig] = "events"
+            [ICalConnectorConfig.TopicsConfig] = "events",
+            [ICalConnectorConfig.OutputTopicConfig] = "calendar.ics"
         };
 
         connector.Start(config);

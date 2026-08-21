@@ -30,10 +30,30 @@ public static class WikipediaConnectorConfig
     public const string ChangesTypes = "wikipedia.changes.types";  // edit, new, log
     public const string ChangesLimit = "wikipedia.changes.limit";
 
+    // Offset keys
+    public const string OffsetRevisionId = "revid";
+    public const string OffsetTimestamp = "timestamp";
+
     // Defaults
     public const string DefaultLanguage = "en";
     public const string DefaultMode = "search";
     public const int DefaultPollIntervalMs = 60000;
     public const int DefaultExtractLength = 500;
     public const int DefaultChangesLimit = 50;
+
+    // Implemented values - anything else is rejected at startup instead of silently producing nothing
+    public const string SupportedModes = "search, page, changes, random";
+
+    /// <summary>
+    /// Throws when the configured mode is not implemented by this connector.
+    /// </summary>
+    public static void ValidateMode(string mode)
+    {
+        if (mode is not ("search" or "page" or "changes" or "random"))
+        {
+            throw new ArgumentException(
+                $"'{Mode}' value '{mode}' is not supported. Supported modes: {SupportedModes}",
+                nameof(mode));
+        }
+    }
 }

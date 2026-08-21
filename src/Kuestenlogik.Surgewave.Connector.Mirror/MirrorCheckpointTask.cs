@@ -35,7 +35,8 @@ public sealed class MirrorCheckpointTask : SourceTask
     {
         _sourceClusterAlias = GetConfig(config, "source.cluster.alias", "source");
         _targetClusterAlias = GetConfig(config, "target.cluster.alias", "target");
-        _checkpointsTopic = GetConfig(config, "checkpoints.topic", "checkpoints.internal");
+        // Empty means "let the replication policy name the topic"
+        _checkpointsTopic = GetConfig(config, "checkpoints.topic", "");
         _intervalMs = int.Parse(GetConfig(config, "checkpoints.interval.ms", "60000"));
         _syncGroupOffsets = bool.Parse(GetConfig(config, "sync.group.offsets.enabled", "true"));
 
@@ -82,8 +83,15 @@ public sealed class MirrorCheckpointTask : SourceTask
 
         _lastCheckpoint = DateTime.UtcNow;
 
+        // Pull the current consumer group offsets from the source cluster into the store.
+        // Without this the store stays empty and the connector never emits a single record.
+        await RefreshCheckpointsAsync(cancellationToken);
+
         var records = new List<SourceRecord>();
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var checkpointsTopic = string.IsNullOrEmpty(_checkpointsTopic)
+            ? _policy.CheckpointTopic(_sourceClusterAlias, _targetClusterAlias)
+            : _checkpointsTopic;
 
         // Get all checkpoint data from the store
         foreach (var checkpoint in _checkpointStore.All)
@@ -111,13 +119,17 @@ public sealed class MirrorCheckpointTask : SourceTask
                 SourcePartition = new Dictionary<string, object>
                 {
                     ["cluster"] = _sourceClusterAlias,
-                    ["group"] = checkpoint.ConsumerGroup
+                    ["group"] = checkpoint.ConsumerGroup,
+                    ["topic"] = checkpoint.Topic,
+                    ["partition"] = checkpoint.Partition
                 },
+                // Each record carries its own cursor: the source offset it checkpoints.
                 SourceOffset = new Dictionary<string, object>
                 {
+                    ["offset"] = checkpoint.SourceOffset,
                     ["timestamp"] = timestamp
                 },
-                Topic = _policy.CheckpointTopic(_sourceClusterAlias, _targetClusterAlias),
+                Topic = checkpointsTopic,
                 Key = key,
                 Value = value,
                 Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(timestamp),
@@ -128,6 +140,58 @@ public sealed class MirrorCheckpointTask : SourceTask
         }
 
         return records;
+    }
+
+    /// <summary>
+    /// Read the committed consumer group offsets from the source cluster and fold them into
+    /// the checkpoint store, translating each source offset into the matching target offset
+    /// where a mapping is known.
+    /// </summary>
+    private async Task RefreshCheckpointsAsync(CancellationToken cancellationToken)
+    {
+        if (_sourceClient == null)
+            return;
+
+        try
+        {
+            var groups = await _sourceClient.Groups.ListAsync(cancellationToken);
+
+            foreach (var group in groups)
+            {
+                if (!_groupFilter.ShouldSync(group.GroupId))
+                    continue;
+
+                var lag = await _sourceClient.Groups.GetLagAsync(group.GroupId, cancellationToken);
+
+                foreach (var topicLag in lag.Topics)
+                {
+                    foreach (var partitionLag in topicLag.Partitions)
+                    {
+                        // Negative means the group never committed for this partition.
+                        if (partitionLag.CommittedOffset < 0)
+                            continue;
+
+                        // Fall back to the source offset when no mapping was recorded yet -
+                        // replicated partitions start at the same offset unless the target
+                        // log was truncated.
+                        var targetOffset = _offsetTranslator.Translate(
+                            _sourceClusterAlias, topicLag.Topic, partitionLag.Partition, partitionLag.CommittedOffset)
+                            ?? partitionLag.CommittedOffset;
+
+                        UpdateCheckpoint(group.GroupId, topicLag.Topic, partitionLag.Partition,
+                            partitionLag.CommittedOffset, targetOffset);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal cancellation
+        }
+        catch (Exception ex)
+        {
+            Context?.RaiseError?.Invoke(ex);
+        }
     }
 
     /// <summary>

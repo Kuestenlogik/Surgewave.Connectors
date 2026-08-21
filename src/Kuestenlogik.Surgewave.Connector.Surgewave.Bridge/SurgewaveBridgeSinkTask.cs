@@ -1,4 +1,4 @@
-using System.Text;
+using System.Globalization;
 using Kuestenlogik.Surgewave.Client.Native;
 using Kuestenlogik.Surgewave.Connect;
 
@@ -17,6 +17,10 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
     private string _topicPrefixSeparator = null!;
     private bool _preservePartitions;
     private int _batchSize;
+    private int _lingerMs;
+    private DateTime _firstBatchedAtUtc = DateTime.MinValue;
+    private long _roundRobin = -1;
+    private readonly Dictionary<string, int> _targetPartitionCounts = [];
     private readonly List<(string topic, int partition, byte[]? key, byte[] value)> _batch = [];
 
     public override string Version => "1.0.0";
@@ -32,7 +36,9 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
             ? topicPrefixSeparator : SurgewaveBridgeConnectorConfig.DefaultTopicPrefixSeparator;
         _preservePartitions = (config.TryGetValue(SurgewaveBridgeConnectorConfig.PreservePartitions, out var preservePartitions) ? preservePartitions : "true") == "true";
         _batchSize = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.BatchSize, out var batchSize)
-            ? batchSize : SurgewaveBridgeConnectorConfig.DefaultBatchSize.ToString());
+            ? batchSize : SurgewaveBridgeConnectorConfig.DefaultBatchSize.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+        _lingerMs = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.ProducerLingerMs, out var lingerMs)
+            ? lingerMs : SurgewaveBridgeConnectorConfig.DefaultProducerLingerMs.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
@@ -41,7 +47,7 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
         {
             var parts = _targetBootstrapServers.Split(':');
             var host = parts[0];
-            var port = parts.Length > 1 ? int.Parse(parts[1]) : 9092;
+            var port = parts.Length > 1 ? int.Parse(parts[1], CultureInfo.InvariantCulture) : 9092;
             _targetClient = new SurgewaveNativeClient(host, port);
             await _targetClient.ConnectAsync(cancellationToken);
         }
@@ -51,16 +57,66 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
             if (record.Value == null) continue;
 
             var targetTopic = GetTargetTopic(record.Topic);
-            var targetPartition = _preservePartitions ? record.Partition : 0;
+            var targetPartition = await ResolveTargetPartitionAsync(targetTopic, record, cancellationToken);
+
+            if (_batch.Count == 0)
+                _firstBatchedAtUtc = DateTime.UtcNow;
 
             _batch.Add((targetTopic, targetPartition, record.Key, record.Value));
 
-            if (_batch.Count >= _batchSize)
+            if (_batch.Count >= _batchSize || LingerElapsed())
             {
                 await FlushBatchAsync(cancellationToken);
             }
         }
     }
+
+    /// <summary>
+    /// Picks the target partition: mirrored when partition preservation is on, otherwise
+    /// spread over the target topic - keyed records stick to one partition, unkeyed ones
+    /// go round-robin.
+    /// </summary>
+    private async Task<int> ResolveTargetPartitionAsync(string targetTopic, SinkRecord record, CancellationToken cancellationToken)
+    {
+        if (_preservePartitions)
+            return record.Partition;
+
+        if (!_targetPartitionCounts.TryGetValue(targetTopic, out var partitionCount))
+        {
+            var description = await _targetClient!.Topics.DescribeAsync(targetTopic, cancellationToken);
+            partitionCount = Math.Max(1, description.PartitionCount);
+            _targetPartitionCounts[targetTopic] = partitionCount;
+        }
+
+        if (partitionCount == 1)
+            return 0;
+
+        if (record.Key is { Length: > 0 })
+            return (int)(FnvHash(record.Key) % (uint)partitionCount);
+
+        return (int)(Interlocked.Increment(ref _roundRobin) % partitionCount);
+    }
+
+    private static uint FnvHash(ReadOnlySpan<byte> key)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (var b in key)
+            {
+                hash = (hash ^ b) * 16777619;
+            }
+            return hash;
+        }
+    }
+
+    /// <summary>
+    /// True once the oldest batched record has been waiting longer than <c>producer.linger.ms</c>.
+    /// </summary>
+    private bool LingerElapsed()
+        => _lingerMs > 0
+           && _batch.Count > 0
+           && (DateTime.UtcNow - _firstBatchedAtUtc).TotalMilliseconds >= _lingerMs;
 
     private async Task FlushBatchAsync(CancellationToken cancellationToken)
     {
@@ -76,6 +132,7 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
         }
 
         _batch.Clear();
+        _firstBatchedAtUtc = DateTime.MinValue;
     }
 
     private string GetTargetTopic(string sourceTopic)
@@ -105,14 +162,20 @@ public sealed class SurgewaveBridgeSinkTask : SinkTask
 
     public override void Stop()
     {
-        // Dispose is handled by DisposeAsync
+        _batch.Clear();
+        _firstBatchedAtUtc = DateTime.MinValue;
+        _targetPartitionCounts.Clear();
+        _targetClient?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _targetClient = null;
     }
 
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
+            Stop();
             _targetClient?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _targetClient = null;
         }
         base.Dispose(disposing);
     }

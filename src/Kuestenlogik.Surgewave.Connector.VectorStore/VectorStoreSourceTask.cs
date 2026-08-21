@@ -6,8 +6,10 @@ using Kuestenlogik.Surgewave.Connect;
 namespace Kuestenlogik.Surgewave.Connector.VectorStore;
 
 /// <summary>
-/// Source task that polls a query topic for incoming query vectors,
-/// searches the embedded vector store, and produces results to an output topic.
+/// Task that searches the embedded vector store for a query vector and turns the hits into
+/// source records. Query vectors have to be handed in through <see cref="ProcessQuery"/>:
+/// polling the configured query topic is not supported, because the Connect runtime gives a
+/// source task no consumer. <see cref="PollAsync"/> therefore fails instead of idling silently.
 /// </summary>
 public sealed class VectorStoreSourceTask : SourceTask
 {
@@ -47,18 +49,25 @@ public sealed class VectorStoreSourceTask : SourceTask
     {
     }
 
-    public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
+    public override Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
     {
-        // In a real implementation, this would consume from the query topic.
-        // For the connector framework, the worker handles topic consumption and
-        // feeds records through. Here we wait briefly if no queries are pending.
-        await Task.Delay(100, cancellationToken);
-        return [];
+        // The Connect runtime hands a source task a producer but no consumer, so the query topic
+        // cannot be read here. Fail loudly rather than idling forever while reporting a healthy
+        // connector that can never emit a single search result.
+        var error = new NotSupportedException(
+            $"'{VectorStoreSourceConnector.QueryTopicConfig}' ('{_queryTopic}') cannot be consumed by a " +
+            "source task - the Connect runtime provides no consumer for source connectors, so this " +
+            "connector can never emit search results. Query the collection in-process through " +
+            $"{nameof(VectorStoreSourceTask)}.{nameof(ProcessQuery)} instead.");
+
+        Context?.RaiseError?.Invoke(error);
+        throw error;
     }
 
     /// <summary>
     /// Processes a query record and returns search results as source records.
-    /// Called by the connector framework when records arrive on the query topic.
+    /// The caller has to hand in the query in-process - the Connect worker never routes the
+    /// configured query topic here, which is why <see cref="PollAsync"/> refuses to run.
     /// </summary>
     internal IReadOnlyList<SourceRecord> ProcessQuery(byte[] queryData, byte[]? queryKey)
     {

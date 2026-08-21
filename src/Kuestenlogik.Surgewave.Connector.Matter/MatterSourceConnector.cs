@@ -21,7 +21,7 @@ public sealed class MatterSourceConnector : SourceConnector
         .Define(MatterConnectorConfig.Topic, ConfigType.String, Importance.High,
             "Surgewave topic to produce Matter device events to", EditorHint.Topic)
         .Define(MatterConnectorConfig.ControllerUrl, ConfigType.String, Importance.High,
-            "Matter controller API URL (e.g., http://localhost:5580)")
+            "Matter REST bridge base URL exposing GET /api/nodes and POST /api/command (e.g., http://localhost:5580); the python-matter-server WebSocket API is not supported")
         .Define(MatterConnectorConfig.ApiKey, ConfigType.Password, "", Importance.Medium,
             "Matter controller API key (if required)")
         .Define(MatterConnectorConfig.PollIntervalMs, ConfigType.Int,

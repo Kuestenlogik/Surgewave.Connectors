@@ -30,6 +30,8 @@ public sealed class HuggingFaceSinkTask : SinkTask
     private int _topK = HuggingFaceConnectorConfig.DefaultTopK;
     private double _topP = HuggingFaceConnectorConfig.DefaultTopP;
     private bool _doSample = HuggingFaceConnectorConfig.DefaultDoSample;
+    private string? _sourceLanguage;
+    private string? _targetLanguage;
     private bool _includeOriginal = HuggingFaceConnectorConfig.DefaultIncludeOriginal;
     private string _outputFormat = HuggingFaceConnectorConfig.FormatMerge;
     private string? _webhookUrl;
@@ -109,6 +111,15 @@ public sealed class HuggingFaceSinkTask : SinkTask
 
         _doSample = !config.TryGetValue(HuggingFaceConnectorConfig.DoSampleConfig, out var doSample) || !bool.TryParse(doSample, out var ds) || ds;
 
+        // Translation config (multilingual models need the language pair as parameters)
+        _sourceLanguage = config.TryGetValue(HuggingFaceConnectorConfig.SourceLanguageConfig, out var sourceLanguage) && !string.IsNullOrEmpty(sourceLanguage)
+            ? sourceLanguage
+            : null;
+
+        _targetLanguage = config.TryGetValue(HuggingFaceConnectorConfig.TargetLanguageConfig, out var targetLanguage) && !string.IsNullOrEmpty(targetLanguage)
+            ? targetLanguage
+            : null;
+
         // Read batching config
         _batchSize = config.TryGetValue(HuggingFaceConnectorConfig.BatchSizeConfig, out var batchSize) && int.TryParse(batchSize, out var bs)
             ? bs
@@ -160,7 +171,16 @@ public sealed class HuggingFaceSinkTask : SinkTask
         // Flush any remaining records
         if (_buffer.Count > 0)
         {
-            FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            try
+            {
+                FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                // Shutdown must not throw; the offsets of the unsent records were never
+                // committed, so they are re-delivered after a restart.
+                Context?.RaiseError?.Invoke(ex);
+            }
         }
 
         _client?.Dispose();
@@ -180,6 +200,16 @@ public sealed class HuggingFaceSinkTask : SinkTask
         }
     }
 
+    /// <summary>
+    /// Drains the batching buffer. The worker commits the consumer offsets right after this
+    /// returns, so anything still buffered here would be acknowledged without ever having
+    /// been sent to the Inference API.
+    /// </summary>
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        await FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _client == null) return;
@@ -188,8 +218,10 @@ public sealed class HuggingFaceSinkTask : SinkTask
         _buffer.Clear();
         _lastFlush = DateTime.UtcNow;
 
-        foreach (var record in recordsToProcess)
+        for (var i = 0; i < recordsToProcess.Count; i++)
         {
+            var record = recordsToProcess[i];
+
             try
             {
                 JsonNode? result = null;
@@ -218,9 +250,24 @@ public sealed class HuggingFaceSinkTask : SinkTask
                 var output = BuildOutput(record, result);
                 await OutputResultAsync(output, cancellationToken);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                // Poison record (unparseable payload or response): skip it, but surface it
+                // instead of silently dropping the record.
+                Context?.RaiseError?.Invoke(ex);
+            }
             catch (Exception ex)
             {
-                Context.RaiseError?.Invoke(ex);
+                // Inference/webhook failure: keep the records that were not processed yet
+                // buffered and rethrow, so the worker retries or DLQs instead of committing
+                // offsets for records that never reached the API.
+                _buffer.InsertRange(0, recordsToProcess.GetRange(i + 1, recordsToProcess.Count - i - 1));
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }
@@ -231,6 +278,24 @@ public sealed class HuggingFaceSinkTask : SinkTask
         if (string.IsNullOrEmpty(inputText)) return null;
 
         var url = $"{_endpoint}/{_modelId}";
+
+        // Multilingual translation models (NLLB, M2M100, mBART) translate into their
+        // default direction unless the language pair is passed along.
+        if (_mode == HuggingFaceConnectorConfig.ModeTranslation && (_sourceLanguage != null || _targetLanguage != null))
+        {
+            var parameters = new JsonObject();
+            if (_sourceLanguage != null) parameters["src_lang"] = _sourceLanguage;
+            if (_targetLanguage != null) parameters["tgt_lang"] = _targetLanguage;
+
+            var translationPayload = new JsonObject
+            {
+                ["inputs"] = inputText,
+                ["parameters"] = parameters
+            };
+
+            return await SendRequestAsync(url, translationPayload, cancellationToken);
+        }
+
         var payload = new { inputs = inputText };
 
         return await SendRequestAsync(url, payload, cancellationToken);
@@ -491,7 +556,11 @@ public sealed class HuggingFaceSinkTask : SinkTask
 
         if (!string.IsNullOrEmpty(_webhookUrl) && _webhookClient != null)
         {
-            await _webhookClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            using var response = await _webhookClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+
+            // A webhook that answers 4xx/5xx has not taken the result - treat it as a
+            // delivery failure instead of dropping the inference result.
+            response.EnsureSuccessStatusCode();
         }
         else
         {

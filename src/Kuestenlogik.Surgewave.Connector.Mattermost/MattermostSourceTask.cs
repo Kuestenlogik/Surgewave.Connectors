@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -11,6 +12,12 @@ namespace Kuestenlogik.Surgewave.Connector.Mattermost;
 #pragma warning disable CA2213, CA1812
 public sealed class MattermostSourceTask : SourceTask
 {
+    private const string PartitionChannelId = "channel_id";
+    private const string OffsetCreateAt = "create_at";
+
+    /// <summary>How long a discovered channel list is reused before the account is re-scanned.</summary>
+    private static readonly TimeSpan ChannelDiscoveryInterval = TimeSpan.FromMinutes(5);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -27,6 +34,8 @@ public sealed class MattermostSourceTask : SourceTask
     private long _messageId;
     private DateTimeOffset _lastPollTime = DateTimeOffset.UtcNow;
     private readonly Dictionary<string, long> _lastPostTimes = new();
+    private HashSet<string> _discoveredChannels = [];
+    private DateTimeOffset _channelsDiscoveredAt = DateTimeOffset.MinValue;
 
     public override string Version => "1.0.0";
 
@@ -72,20 +81,24 @@ public sealed class MattermostSourceTask : SourceTask
         }
         _lastPollTime = DateTimeOffset.UtcNow;
 
-        if (_httpClient == null || _channelFilter == null || _channelFilter.Count == 0)
+        if (_httpClient == null)
             return records;
 
         try
         {
-            foreach (var channelId in _channelFilter)
+            foreach (var channelId in await ResolveChannelsAsync(cancellationToken))
             {
-                _lastPostTimes.TryGetValue(channelId, out var since);
-                if (since == 0)
-                    since = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
+                var since = GetSince(channelId);
 
-                var response = await _httpClient.GetAsync(new Uri($"/api/v4/channels/{channelId}/posts?since={since}", UriKind.Relative), cancellationToken);
+                using var response = await _httpClient.GetAsync(
+                    new Uri($"/api/v4/channels/{channelId}/posts?since={since.ToString(CultureInfo.InvariantCulture)}", UriKind.Relative),
+                    cancellationToken);
                 if (!response.IsSuccessStatusCode)
+                {
+                    Context?.RaiseError?.Invoke(new HttpRequestException(
+                        $"Mattermost post fetch for channel '{channelId}' failed with status {(int)response.StatusCode} ({response.StatusCode})"));
                     continue;
+                }
 
                 var json = await response.Content.ReadAsStringAsync(cancellationToken);
                 var postsResponse = JsonSerializer.Deserialize<PostsResponse>(json, JsonOptions);
@@ -118,6 +131,88 @@ public sealed class MattermostSourceTask : SourceTask
         return records;
     }
 
+    /// <summary>
+    /// Resolves the channels to poll. An empty 'mattermost.channel.ids' means "all channels the
+    /// token can see", so the account's teams are scanned instead of polling nothing at all.
+    /// </summary>
+    private async Task<HashSet<string>> ResolveChannelsAsync(CancellationToken cancellationToken)
+    {
+        var configured = _channelFilter;
+        if (configured is { Count: > 0 })
+            return configured;
+
+        if (_discoveredChannels.Count > 0 && DateTimeOffset.UtcNow - _channelsDiscoveredAt < ChannelDiscoveryInterval)
+            return _discoveredChannels;
+
+        using var teamsResponse = await _httpClient!.GetAsync(new Uri("/api/v4/users/me/teams", UriKind.Relative), cancellationToken);
+        if (!teamsResponse.IsSuccessStatusCode)
+        {
+            Context?.RaiseError?.Invoke(new HttpRequestException(
+                $"Mattermost team listing failed with status {(int)teamsResponse.StatusCode} ({teamsResponse.StatusCode})"));
+            return _discoveredChannels;
+        }
+
+        var teamsJson = await teamsResponse.Content.ReadAsStringAsync(cancellationToken);
+        var teams = JsonSerializer.Deserialize<List<MattermostTeam>>(teamsJson, JsonOptions) ?? [];
+
+        var discovered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var team in teams)
+        {
+            if (string.IsNullOrEmpty(team.Id))
+                continue;
+
+            using var channelsResponse = await _httpClient.GetAsync(
+                new Uri($"/api/v4/users/me/teams/{team.Id}/channels", UriKind.Relative), cancellationToken);
+            if (!channelsResponse.IsSuccessStatusCode)
+            {
+                Context?.RaiseError?.Invoke(new HttpRequestException(
+                    $"Mattermost channel listing for team '{team.Id}' failed with status {(int)channelsResponse.StatusCode} ({channelsResponse.StatusCode})"));
+                continue;
+            }
+
+            var channelsJson = await channelsResponse.Content.ReadAsStringAsync(cancellationToken);
+            var channels = JsonSerializer.Deserialize<List<MattermostChannel>>(channelsJson, JsonOptions) ?? [];
+            foreach (var channel in channels)
+            {
+                if (!string.IsNullOrEmpty(channel.Id))
+                    discovered.Add(channel.Id);
+            }
+        }
+
+        _discoveredChannels = discovered;
+        _channelsDiscoveredAt = DateTimeOffset.UtcNow;
+        return discovered;
+    }
+
+    /// <summary>
+    /// Returns the cursor to poll a channel from: the live one, else the one persisted with the
+    /// last emitted post, else a short look-back. Without the restore a restart longer than the
+    /// look-back would silently skip every post written while the task was down.
+    /// </summary>
+    private long GetSince(string channelId)
+    {
+        if (_lastPostTimes.TryGetValue(channelId, out var since) && since > 0)
+            return since;
+
+        var storedOffset = Context?.OffsetStorageReader?.Offset(
+            new Dictionary<string, object> { [PartitionChannelId] = channelId });
+
+        if (storedOffset != null &&
+            storedOffset.TryGetValue(OffsetCreateAt, out var createAt) && createAt != null &&
+            long.TryParse(createAt.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var stored) &&
+            stored > 0)
+        {
+            since = stored;
+        }
+        else
+        {
+            since = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
+        }
+
+        _lastPostTimes[channelId] = since;
+        return since;
+    }
+
     private SourceRecord CreateSourceRecord(MattermostPost post, string channelId)
     {
         var eventData = new Dictionary<string, object?>
@@ -138,12 +233,12 @@ public sealed class MattermostSourceTask : SourceTask
         {
             SourcePartition = new Dictionary<string, object>
             {
-                ["channel_id"] = channelId
+                [PartitionChannelId] = channelId
             },
             SourceOffset = new Dictionary<string, object>
             {
                 ["post_id"] = post.Id ?? string.Empty,
-                ["create_at"] = post.CreateAt,
+                [OffsetCreateAt] = post.CreateAt,
                 ["message_id"] = Interlocked.Increment(ref _messageId)
             },
             Topic = _topic,
@@ -178,6 +273,16 @@ public sealed class MattermostSourceTask : SourceTask
     {
         public Dictionary<string, MattermostPost>? Posts { get; set; }
         public List<string>? Order { get; set; }
+    }
+
+    private sealed class MattermostTeam
+    {
+        public string? Id { get; set; }
+    }
+
+    private sealed class MattermostChannel
+    {
+        public string? Id { get; set; }
     }
 
     private sealed class MattermostPost

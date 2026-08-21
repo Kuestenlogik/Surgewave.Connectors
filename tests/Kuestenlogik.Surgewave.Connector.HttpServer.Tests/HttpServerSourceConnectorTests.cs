@@ -244,3 +244,102 @@ public class HttpServerSourceConnectorAuthTests : IDisposable
         Assert.True(headers.TryGetProperty("X-Other-Header", out _));
     }
 }
+
+/// <summary>
+/// The worker does not merge ConfigDef defaults into task configs, so the task has to
+/// cope with keys that were left at their declared default.
+/// </summary>
+public class HttpServerSourceConnectorDefaultConfigTests : IDisposable
+{
+    private readonly HttpServerSourceTask _task;
+    private readonly HttpClient _httpClient;
+    private readonly int _port;
+
+    public HttpServerSourceConnectorDefaultConfigTests()
+    {
+        _port = 20080 + Random.Shared.Next(1000);
+        _task = new HttpServerSourceTask();
+        _httpClient = new HttpClient { BaseAddress = new Uri($"http://localhost:{_port}") };
+
+        // Note: no Host key - it stays at its declared default.
+        var config = new Dictionary<string, string>
+        {
+            [HttpServerConnectorConfig.Port] = _port.ToString(),
+            [HttpServerConnectorConfig.BasePath] = "/api",
+            [HttpServerConnectorConfig.SourceTopic] = "test-topic",
+            [HttpServerConnectorConfig.SourcePath] = "/ingest"
+        };
+
+        _task.Start(config);
+    }
+
+    public void Dispose()
+    {
+        _task.Stop();
+        _task.Dispose();
+        _httpClient.Dispose();
+    }
+
+    [Fact]
+    public async Task PostRequest_WithDefaultedHost_ProducesRecord()
+    {
+        var response = await _httpClient.PostAsJsonAsync("/api/ingest", new { message = "test" });
+
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, response.StatusCode);
+
+        var records = await _task.PollAsync(CancellationToken.None);
+        Assert.Single(records);
+        Assert.Equal($"localhost:{_port}", records[0].SourcePartition["server"]);
+    }
+}
+
+public class HttpServerSourceConnectorQueueLimitTests : IDisposable
+{
+    private readonly HttpServerSourceTask _task;
+    private readonly HttpClient _httpClient;
+
+    public HttpServerSourceConnectorQueueLimitTests()
+    {
+        var port = 21080 + Random.Shared.Next(1000);
+        _task = new HttpServerSourceTask();
+        _httpClient = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
+
+        var config = new Dictionary<string, string>
+        {
+            [HttpServerConnectorConfig.Host] = "localhost",
+            [HttpServerConnectorConfig.Port] = port.ToString(),
+            [HttpServerConnectorConfig.BasePath] = "/api",
+            [HttpServerConnectorConfig.SourceTopic] = "test-topic",
+            [HttpServerConnectorConfig.SourcePath] = "/ingest",
+            [HttpServerConnectorConfig.SourceMaxQueueSize] = "1"
+        };
+
+        _task.Start(config);
+    }
+
+    public void Dispose()
+    {
+        _task.Stop();
+        _task.Dispose();
+        _httpClient.Dispose();
+    }
+
+    [Fact]
+    public async Task Request_WhenQueueIsFull_IsRejectedInsteadOfAcknowledged()
+    {
+        var first = await _httpClient.PostAsJsonAsync("/api/ingest", new { index = 1 });
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, first.StatusCode);
+
+        // Queue holds one record until the next poll - the second request must not be
+        // acknowledged, otherwise the caller believes an unqueued message was accepted.
+        var second = await _httpClient.PostAsJsonAsync("/api/ingest", new { index = 2 });
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, second.StatusCode);
+
+        var records = await _task.PollAsync(CancellationToken.None);
+        Assert.Single(records);
+
+        // Polling drains the queue, so the next request fits again.
+        var third = await _httpClient.PostAsJsonAsync("/api/ingest", new { index = 3 });
+        Assert.Equal(System.Net.HttpStatusCode.Accepted, third.StatusCode);
+    }
+}

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Client.Native;
@@ -19,6 +20,10 @@ public sealed class OpenAITransformTask : SinkTask
 
     private ChatClient? _chatClient;
     private SurgewaveNativeClient? _ownProducer;
+    private string _producerHost = "localhost";
+    private int _producerPort = 9092;
+    private int _outputPartitionCount;
+    private long _roundRobin = -1;
     private string _outputTopic = "";
     private string _systemPrompt = "";
     private string _inputField = "";
@@ -44,9 +49,11 @@ public sealed class OpenAITransformTask : SinkTask
         _inputField = config.GetValueOrDefault(OpenAIConnectorConfig.InputFieldConfig, "") ?? "";
         _outputFormat = config.GetValueOrDefault(OpenAIConnectorConfig.OutputFormatConfig, "") ?? "text";
 
-        if (config.TryGetValue(OpenAIConnectorConfig.MaxTokensConfig, out var maxStr) && int.TryParse(maxStr, out var max))
+        if (config.TryGetValue(OpenAIConnectorConfig.MaxTokensConfig, out var maxStr)
+            && int.TryParse(maxStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var max))
             _maxTokens = max;
-        if (config.TryGetValue(OpenAIConnectorConfig.TemperatureConfig, out var tempStr) && float.TryParse(tempStr, out var temp))
+        if (config.TryGetValue(OpenAIConnectorConfig.TemperatureConfig, out var tempStr)
+            && float.TryParse(tempStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var temp))
             _temperature = temp;
 
         var baseUrl = config.GetValueOrDefault(OpenAIConnectorConfig.BaseUrlConfig, "") ?? "";
@@ -59,27 +66,41 @@ public sealed class OpenAITransformTask : SinkTask
         if (string.IsNullOrEmpty(model)) model = OpenAIConnectorConfig.DefaultCompletionsModel;
         _chatClient = client.GetChatClient(model);
 
-        // Create own producer for standalone mode (when Context.Producer is not injected)
-        var bootstrapServers = config.GetValueOrDefault("bootstrap.servers", "") ?? "localhost:9092";
+        // Remember where an own producer would connect to in standalone mode
+        // (when Context.Producer is not injected). The connection itself is opened
+        // lazily on the first put so Start() never blocks on I/O.
+        var bootstrapServers = config.GetValueOrDefault("bootstrap.servers", "") ?? "";
         if (string.IsNullOrEmpty(bootstrapServers)) bootstrapServers = "localhost:9092";
         var parts = bootstrapServers.Split(':');
-        _ownProducer = new SurgewaveNativeClient(parts[0], parts.Length > 1 && int.TryParse(parts[1], out var p) ? p : 9092);
-        _ownProducer.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+        _producerHost = parts[0];
+        _producerPort = parts.Length > 1 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var p)
+            ? p
+            : 9092;
     }
 
     public override void Stop()
     {
         _chatClient = null;
+        DisposeProducer();
     }
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing && _ownProducer != null)
+        if (disposing)
         {
-            _ownProducer.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _ownProducer = null;
+            DisposeProducer();
         }
         base.Dispose(disposing);
+    }
+
+    private void DisposeProducer()
+    {
+        if (_ownProducer is null)
+            return;
+
+        _ownProducer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _ownProducer = null;
+        _outputPartitionCount = 0;
     }
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
@@ -92,7 +113,12 @@ public sealed class OpenAITransformTask : SinkTask
             {
                 var inputText = ExtractInput(record);
                 if (string.IsNullOrWhiteSpace(inputText))
+                {
+                    // Poison record: nothing to send to the model - skip it, but stay visible
+                    Context?.RaiseError?.Invoke(new InvalidOperationException(FormattableString.Invariant(
+                        $"Skipping record {record.Topic}:{record.Partition}:{record.Offset}: no input text")));
                     continue;
+                }
 
                 var messages = new List<ChatMessage>();
                 if (!string.IsNullOrEmpty(_systemPrompt))
@@ -118,19 +144,78 @@ public sealed class OpenAITransformTask : SinkTask
                         outputBytes,
                         cancellationToken);
                 }
-                else if (_ownProducer is { IsConnected: true })
+                else
                 {
-                    await _ownProducer.Messaging.SendAsync(
-                        _outputTopic, 0,
+                    var producer = await EnsureProducerAsync(cancellationToken);
+                    var partition = await ResolvePartitionAsync(producer, record.Key, cancellationToken);
+
+                    await producer.Messaging.SendAsync(
+                        _outputTopic, partition,
                         record.Key,
                         outputBytes,
                         cancellationToken);
                 }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                // The response was never produced - surface it and fail the batch so the
+                // runner can retry or DLQ instead of committing the offset silently.
                 Context?.RaiseError?.Invoke(ex);
+                throw;
             }
+        }
+    }
+
+    private async Task<SurgewaveNativeClient> EnsureProducerAsync(CancellationToken cancellationToken)
+    {
+        var producer = _ownProducer ??= new SurgewaveNativeClient(_producerHost, _producerPort);
+
+        if (!producer.IsConnected)
+            await producer.ConnectAsync(cancellationToken);
+
+        return producer;
+    }
+
+    /// <summary>
+    /// Spreads output across the topic's partitions: keyed records stick to one partition,
+    /// unkeyed records go round-robin.
+    /// </summary>
+    private async Task<int> ResolvePartitionAsync(SurgewaveNativeClient producer, byte[]? key, CancellationToken cancellationToken)
+    {
+        if (_outputPartitionCount <= 0)
+        {
+            try
+            {
+                var description = await producer.Topics.DescribeAsync(_outputTopic, cancellationToken);
+                _outputPartitionCount = Math.Max(1, description.PartitionCount);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Layout unknown (e.g. the topic is created on first produce) - stay on partition 0
+                Context?.RaiseError?.Invoke(ex);
+                return 0;
+            }
+        }
+
+        if (_outputPartitionCount == 1)
+            return 0;
+
+        if (key is { Length: > 0 })
+            return (int)(FnvHash(key) % (uint)_outputPartitionCount);
+
+        return (int)(Interlocked.Increment(ref _roundRobin) % _outputPartitionCount);
+    }
+
+    private static uint FnvHash(ReadOnlySpan<byte> key)
+    {
+        unchecked
+        {
+            uint hash = 2166136261;
+            foreach (var b in key)
+            {
+                hash = (hash ^ b) * 16777619;
+            }
+            return hash;
         }
     }
 

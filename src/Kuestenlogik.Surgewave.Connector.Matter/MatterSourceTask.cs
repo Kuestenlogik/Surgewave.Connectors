@@ -9,6 +9,11 @@ namespace Kuestenlogik.Surgewave.Connector.Matter;
 /// <summary>
 /// Task that monitors Matter devices via a Matter controller.
 /// </summary>
+/// <remarks>
+/// Speaks a REST bridge contract - <c>GET {controller}/api/nodes</c> and
+/// <c>POST {controller}/api/command</c> - not the WebSocket protocol of python-matter-server.
+/// Point <c>matter.controller.url</c> at a bridge exposing those endpoints.
+/// </remarks>
 [SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Interface used for extensibility")]
 [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient disposed in Dispose()")]
 [SuppressMessage("Usage", "CA2234:Pass System.Uri objects instead of strings", Justification = "URL strings are simpler for REST API calls")]
@@ -74,8 +79,13 @@ public sealed class MatterSourceTask : SourceTask
         try
         {
             // Get all nodes from the Matter controller
-            var response = await _httpClient!.GetAsync($"{_controllerUrl}/api/nodes", cancellationToken);
-            if (!response.IsSuccessStatusCode) return [];
+            using var response = await _httpClient!.GetAsync($"{_controllerUrl}/api/nodes", cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                Context?.RaiseError?.Invoke(new HttpRequestException(
+                    $"Matter node listing failed with status {(int)response.StatusCode} ({response.StatusCode})"));
+                return [];
+            }
 
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             using var doc = JsonDocument.Parse(json);
@@ -103,9 +113,15 @@ public sealed class MatterSourceTask : SourceTask
                 records.Add(CreateDeviceRecord(node, nodeId, deviceType));
             }
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // Log and continue
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Surface poll failures (unreachable controller, bad API key, malformed payloads)
+            // instead of silently returning an empty batch - an idle controller looks the same.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;

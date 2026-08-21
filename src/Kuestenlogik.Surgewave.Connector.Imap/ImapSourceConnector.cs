@@ -39,17 +39,17 @@ public class ImapSourceConnector : SourceConnector
         .Define(ImapConnectorConfig.FolderConfig, ConfigType.String, ImapConnectorConfig.DefaultFolder, Importance.Medium,
             "IMAP folder to monitor (default: INBOX)")
         .Define(ImapConnectorConfig.FoldersConfig, ConfigType.String, Importance.Low,
-            "Comma-separated list of folders to monitor")
+            "Folder to monitor - a single entry only; run one connector per folder")
         .Define(ImapConnectorConfig.RecursiveConfig, ConfigType.Boolean, false, Importance.Low,
-            "Recursively monitor subfolders")
+            "Recursively monitor subfolders (not supported - must be false)")
 
         // Polling settings
         .Define(ImapConnectorConfig.PollIntervalMsConfig, ConfigType.Int, ImapConnectorConfig.DefaultPollIntervalMs, Importance.Medium,
-            "Poll interval in milliseconds")
+            "Poll interval in milliseconds (ignored while IDLE is active)")
         .Define(ImapConnectorConfig.UseIdleConfig, ConfigType.Boolean, ImapConnectorConfig.DefaultUseIdle, Importance.Medium,
             "Use IMAP IDLE for push notifications (if supported)")
         .Define(ImapConnectorConfig.IdleTimeoutMinutesConfig, ConfigType.Int, ImapConnectorConfig.DefaultIdleTimeoutMinutes, Importance.Low,
-            "IDLE timeout in minutes before reconnecting")
+            "Maximum minutes to stay in IDLE before polling again")
         .Define(ImapConnectorConfig.BatchSizeConfig, ConfigType.Int, ImapConnectorConfig.DefaultBatchSize, Importance.Low,
             "Maximum messages to fetch per poll")
 
@@ -106,6 +106,23 @@ public class ImapSourceConnector : SourceConnector
             string.IsNullOrWhiteSpace(username))
         {
             throw new ArgumentException($"Missing required configuration: {ImapConnectorConfig.UsernameConfig}");
+        }
+
+        // A task monitors exactly one folder - reject configs that ask for more instead
+        // of silently ignoring them.
+        if (config.TryGetValue(ImapConnectorConfig.FoldersConfig, out var folders) &&
+            !string.IsNullOrWhiteSpace(folders) &&
+            folders.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length > 1)
+        {
+            throw new ArgumentException($"{ImapConnectorConfig.FoldersConfig} may name only one folder; " +
+                                        "run one connector per folder");
+        }
+
+        if (config.TryGetValue(ImapConnectorConfig.RecursiveConfig, out var recursive) &&
+            bool.TryParse(recursive, out var recursiveEnabled) && recursiveEnabled)
+        {
+            throw new ArgumentException($"{ImapConnectorConfig.RecursiveConfig} is not supported; " +
+                                        $"only {ImapConnectorConfig.FolderConfig} is monitored");
         }
 
         // Validate move configuration

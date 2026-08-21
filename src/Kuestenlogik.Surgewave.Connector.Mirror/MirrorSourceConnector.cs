@@ -53,13 +53,11 @@ public sealed class MirrorSourceConnector : SourceConnector
         .Define("replication.policy.separator", ConfigType.String, ".", Importance.Low,
             "Separator for topic naming in replication policy")
         .Define("source.security.protocol", ConfigType.String, null, Importance.Medium,
-            "Security protocol for source cluster", EditorHint.Select, options: ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"])
-        .Define("source.sasl.mechanism", ConfigType.String, null, Importance.Medium,
-            "SASL mechanism for source cluster", EditorHint.Select, options: ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"])
+            "Security protocol for source cluster (only PLAINTEXT is supported - anything else is rejected)",
+            EditorHint.Select, options: ["PLAINTEXT"])
         .Define("target.security.protocol", ConfigType.String, null, Importance.Medium,
-            "Security protocol for target cluster", EditorHint.Select, options: ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"])
-        .Define("target.sasl.mechanism", ConfigType.String, null, Importance.Medium,
-            "SASL mechanism for target cluster", EditorHint.Select, options: ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"])
+            "Security protocol for target cluster (only PLAINTEXT is supported - anything else is rejected)",
+            EditorHint.Select, options: ["PLAINTEXT"])
         .Define("consumer.poll.timeout.ms", ConfigType.Int, 1000L, Importance.Low,
             "Consumer poll timeout in milliseconds")
         .Define("fetch.max.bytes", ConfigType.Int, 52428800L, Importance.Low,
@@ -81,6 +79,8 @@ public sealed class MirrorSourceConnector : SourceConnector
         if (string.IsNullOrEmpty(_config.TargetBootstrapServers))
             throw new ArgumentException("target.bootstrap.servers is required");
 
+        ValidateSecurityConfig();
+
         _policy = ReplicationPolicyFactory.Create(_config);
         _topicFilter = DefaultTopicFilter.FromConfig(_config, _policy);
 
@@ -96,6 +96,41 @@ public sealed class MirrorSourceConnector : SourceConnector
             null,
             TimeSpan.FromMilliseconds(_config.TopicRefreshIntervalMs),
             TimeSpan.FromMilliseconds(_config.TopicRefreshIntervalMs));
+    }
+
+    /// <summary>
+    /// Replication runs over the Surgewave native client, which currently only speaks
+    /// PLAINTEXT and has no SASL support. Anything else would be accepted and then silently
+    /// ignored, so reject it loudly instead of pretending the setting took effect.
+    /// </summary>
+    private void ValidateSecurityConfig()
+    {
+        RejectSecurityProtocol("source.security.protocol", _config.SourceSecurityProtocol);
+        RejectSecurityProtocol("target.security.protocol", _config.TargetSecurityProtocol);
+        RejectSasl("source.sasl.mechanism", _config.SourceSaslMechanism);
+        RejectSasl("source.sasl.username", _config.SourceSaslUsername);
+        RejectSasl("source.sasl.password", _config.SourceSaslPassword);
+        RejectSasl("target.sasl.mechanism", _config.TargetSaslMechanism);
+        RejectSasl("target.sasl.username", _config.TargetSaslUsername);
+        RejectSasl("target.sasl.password", _config.TargetSaslPassword);
+    }
+
+    private static void RejectSecurityProtocol(string key, string? value)
+    {
+        if (string.IsNullOrEmpty(value) || string.Equals(value, "PLAINTEXT", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        throw new ArgumentException(
+            $"'{key}' = '{value}' is not supported: the mirror connector replicates over the native client, which only speaks PLAINTEXT.");
+    }
+
+    private static void RejectSasl(string key, string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return;
+
+        throw new ArgumentException(
+            $"'{key}' is not supported: the mirror connector replicates over the native client, which does not implement SASL.");
     }
 
     private async Task ConnectToSourceClusterAsync()
@@ -151,9 +186,10 @@ public sealed class MirrorSourceConnector : SourceConnector
         var tasksCount = Math.Min(maxTasks, _sourceTopics.Count);
         var partitionedTopics = PartitionTopics(_sourceTopics, tasksCount);
 
+        // Security settings are rejected in Start (the native client only speaks PLAINTEXT),
+        // so there is nothing security related left to forward to the tasks.
         return partitionedTopics.Select((topics, i) =>
-        {
-            var taskConfig = new Dictionary<string, string>
+            new Dictionary<string, string>
             {
                 ["task.id"] = i.ToString(),
                 ["topics"] = string.Join(",", topics),
@@ -167,24 +203,7 @@ public sealed class MirrorSourceConnector : SourceConnector
                 ["fetch.max.bytes"] = _config.FetchMaxBytes.ToString(),
                 ["fetch.min.bytes"] = _config.FetchMinBytes.ToString(),
                 ["max.poll.records"] = _config.MaxPollRecords.ToString()
-            };
-
-            // Add security config if present
-            if (!string.IsNullOrEmpty(_config.SourceSecurityProtocol))
-                taskConfig["source.security.protocol"] = _config.SourceSecurityProtocol;
-            if (!string.IsNullOrEmpty(_config.SourceSaslMechanism))
-                taskConfig["source.sasl.mechanism"] = _config.SourceSaslMechanism;
-            if (!string.IsNullOrEmpty(_config.SourceSaslUsername))
-                taskConfig["source.sasl.username"] = _config.SourceSaslUsername;
-            if (!string.IsNullOrEmpty(_config.SourceSaslPassword))
-                taskConfig["source.sasl.password"] = _config.SourceSaslPassword;
-            if (!string.IsNullOrEmpty(_config.TargetSecurityProtocol))
-                taskConfig["target.security.protocol"] = _config.TargetSecurityProtocol;
-            if (!string.IsNullOrEmpty(_config.TargetSaslMechanism))
-                taskConfig["target.sasl.mechanism"] = _config.TargetSaslMechanism;
-
-            return taskConfig;
-        }).ToList();
+            }).ToList<IDictionary<string, string>>();
     }
 
     private async Task RefreshSourceTopicsAsync()

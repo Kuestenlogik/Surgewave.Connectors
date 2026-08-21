@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Azure.Identity;
@@ -12,6 +13,9 @@ namespace Kuestenlogik.Surgewave.Connector.Teams;
 /// </summary>
 public sealed class TeamsSourceTask : SourceTask
 {
+    private const int PageSize = 50;
+    private const int MaxPagesPerPoll = 20;
+
     public override string Version => "1.0.0";
 
     private string _topic = "";
@@ -20,8 +24,14 @@ public sealed class TeamsSourceTask : SourceTask
     private string _channelId = "";
     private int _pollIntervalMs = TeamsConnectorConfig.DefaultPollIntervalMs;
     private bool _includeReplies = TeamsConnectorConfig.DefaultIncludeReplies;
-    private DateTimeOffset _lastPollTime;
-    private string? _lastMessageId;
+    private readonly Dictionary<string, object> _sourcePartition = [];
+
+    /// <summary>Resume point: messages created at or before this are done.</summary>
+    private DateTimeOffset _cursor;
+
+    /// <summary>Resume point that becomes valid once the batch in flight is fully committed.</summary>
+    private DateTimeOffset _batchCursor;
+
     private long _offset;
 
     public override void Start(IDictionary<string, string> config)
@@ -44,7 +54,12 @@ public sealed class TeamsSourceTask : SourceTask
         if (config.TryGetValue(TeamsConnectorConfig.IncludeReplies, out var replies))
             _includeReplies = bool.Parse(replies);
 
-        _lastPollTime = DateTimeOffset.UtcNow;
+        _sourcePartition[TeamsConnectorConfig.PartitionTeamId] = _teamId;
+        _sourcePartition[TeamsConnectorConfig.PartitionChannelId] = _channelId;
+
+        // Resume where the previous run committed; only a fresh connector starts at "now".
+        _cursor = ReadStoredCursor() ?? DateTimeOffset.UtcNow;
+        _batchCursor = _cursor;
     }
 
     public override void Stop()
@@ -70,69 +85,54 @@ public sealed class TeamsSourceTask : SourceTask
 
         try
         {
-            // Get messages from the channel
-            var messages = await _graphClient.Teams[_teamId].Channels[_channelId].Messages
-                .GetAsync(config =>
-                {
-                    config.QueryParameters.Top = 50;
-                    config.QueryParameters.Orderby = ["createdDateTime desc"];
-                }, cancellationToken);
+            var messages = await FetchNewMessagesAsync(cancellationToken);
 
-            if (messages?.Value == null) return records;
+            // Resume point that is still valid while the current message group is in flight.
+            var groupCursor = _cursor;
 
-            // Process new messages (newer than last poll time)
-            foreach (var message in messages.Value.OrderBy(m => m.CreatedDateTime))
+            foreach (var message in messages)
             {
-                // Skip messages we've already processed
-                if (message.Id == _lastMessageId) continue;
-                if (message.CreatedDateTime <= _lastPollTime) continue;
+                List<SourceRecord>? replyRecords = null;
 
-                var record = CreateRecord(message);
-                if (record != null)
-                    records.Add(record);
-
-                // Process replies if enabled
                 if (_includeReplies && message.Id != null)
                 {
                     try
                     {
-                        var replies = await _graphClient.Teams[_teamId].Channels[_channelId]
-                            .Messages[message.Id].Replies
-                            .GetAsync(cancellationToken: cancellationToken);
-
-                        if (replies?.Value != null)
-                        {
-                            foreach (var reply in replies.Value.OrderBy(r => r.CreatedDateTime))
-                            {
-                                if (reply.CreatedDateTime <= _lastPollTime) continue;
-
-                                var replyRecord = CreateRecord(reply, message.Id);
-                                if (replyRecord != null)
-                                    records.Add(replyRecord);
-                            }
-                        }
+                        replyRecords = await FetchRepliesAsync(message.Id, groupCursor, cancellationToken);
                     }
-                    catch
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        // Ignore reply fetch errors
+                        // Surface it and end the batch here: the cursor must not move past a message
+                        // whose replies could not be read, so the whole group is retried next poll.
+                        Context?.RaiseError?.Invoke(ex);
+                        break;
                     }
                 }
+
+                var record = CreateRecord(message, groupCursor);
+                if (record != null)
+                    records.Add(record);
+
+                if (replyRecords != null)
+                    records.AddRange(replyRecords);
+
+                if (message.CreatedDateTime.HasValue)
+                    groupCursor = message.CreatedDateTime.Value;
             }
 
-            if (messages.Value.Count > 0)
-            {
-                var latest = messages.Value.MaxBy(m => m.CreatedDateTime);
-                if (latest != null)
-                {
-                    _lastMessageId = latest.Id;
-                    if (latest.CreatedDateTime.HasValue)
-                        _lastPollTime = latest.CreatedDateTime.Value;
-                }
-            }
+            _batchCursor = groupCursor;
+
+            // Nothing to commit, so the scanned range can be skipped straight away.
+            if (records.Count == 0)
+                _cursor = _batchCursor;
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal cancellation
         }
         catch (Exception ex)
         {
-            Context.RaiseError?.Invoke(ex);
+            Context?.RaiseError?.Invoke(ex);
         }
 
         // Wait before next poll if no messages
@@ -151,7 +151,131 @@ public sealed class TeamsSourceTask : SourceTask
         return records;
     }
 
-    private SourceRecord? CreateRecord(ChatMessage message, string? parentId = null)
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (record.SourceOffset.TryGetValue(TeamsConnectorConfig.OffsetCursor, out var raw) &&
+            TryParseCursor(raw, out var cursor) &&
+            cursor > _cursor)
+        {
+            _cursor = cursor;
+        }
+    }
+
+    public override Task CommitAsync(CancellationToken cancellationToken)
+    {
+        // Every record of the batch is committed, so its newest group is complete.
+        if (_batchCursor > _cursor)
+            _cursor = _batchCursor;
+
+        return Task.CompletedTask;
+    }
+
+    private DateTimeOffset? ReadStoredCursor()
+    {
+        var stored = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+
+        if (stored != null &&
+            stored.TryGetValue(TeamsConnectorConfig.OffsetCursor, out var raw) &&
+            TryParseCursor(raw, out var cursor))
+        {
+            return cursor;
+        }
+
+        return null;
+    }
+
+    private static bool TryParseCursor(object? raw, out DateTimeOffset cursor)
+    {
+        if (raw is DateTimeOffset stored)
+        {
+            cursor = stored;
+            return true;
+        }
+
+        return DateTimeOffset.TryParse(
+            raw?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out cursor);
+    }
+
+    /// <summary>
+    /// Reads every channel message created after the cursor, following the Graph paging links so
+    /// that bursts larger than a single page are not skipped.
+    /// </summary>
+    private async Task<List<ChatMessage>> FetchNewMessagesAsync(CancellationToken cancellationToken)
+    {
+        var newMessages = new List<ChatMessage>();
+
+        var page = await _graphClient!.Teams[_teamId].Channels[_channelId].Messages
+            .GetAsync(request =>
+            {
+                request.QueryParameters.Top = PageSize;
+                request.QueryParameters.Orderby = ["createdDateTime desc"];
+            }, cancellationToken);
+
+        for (var pages = 0; pages < MaxPagesPerPoll && page is not null; pages++)
+        {
+            var reachedCursor = false;
+
+            foreach (var message in page.Value ?? [])
+            {
+                // Newest first, so the first already-processed message ends the scan.
+                if ((message.CreatedDateTime ?? DateTimeOffset.MinValue) <= _cursor)
+                {
+                    reachedCursor = true;
+                    break;
+                }
+
+                newMessages.Add(message);
+            }
+
+            var nextLink = page.OdataNextLink;
+            if (reachedCursor || string.IsNullOrEmpty(nextLink)) break;
+
+            page = await _graphClient.Teams[_teamId].Channels[_channelId].Messages
+                .WithUrl(nextLink)
+                .GetAsync(cancellationToken: cancellationToken);
+        }
+
+        // Emit oldest first so the cursor only ever moves forward.
+        return [.. newMessages.OrderBy(m => m.CreatedDateTime)];
+    }
+
+    private async Task<List<SourceRecord>> FetchRepliesAsync(
+        string messageId, DateTimeOffset groupCursor, CancellationToken cancellationToken)
+    {
+        var replies = new List<ChatMessage>();
+
+        var page = await _graphClient!.Teams[_teamId].Channels[_channelId]
+            .Messages[messageId].Replies
+            .GetAsync(request => request.QueryParameters.Top = PageSize, cancellationToken);
+
+        for (var pages = 0; pages < MaxPagesPerPoll && page is not null; pages++)
+        {
+            replies.AddRange(page.Value ?? []);
+
+            var nextLink = page.OdataNextLink;
+            if (string.IsNullOrEmpty(nextLink)) break;
+
+            page = await _graphClient.Teams[_teamId].Channels[_channelId]
+                .Messages[messageId].Replies
+                .WithUrl(nextLink)
+                .GetAsync(cancellationToken: cancellationToken);
+        }
+
+        var records = new List<SourceRecord>();
+
+        foreach (var reply in replies.OrderBy(r => r.CreatedDateTime))
+        {
+            if ((reply.CreatedDateTime ?? DateTimeOffset.MinValue) <= groupCursor) continue;
+
+            var replyRecord = CreateRecord(reply, groupCursor, messageId);
+            if (replyRecord != null)
+                records.Add(replyRecord);
+        }
+
+        return records;
+    }
+
+    private SourceRecord? CreateRecord(ChatMessage message, DateTimeOffset groupCursor, string? parentId = null)
     {
         if (string.IsNullOrEmpty(message.Body?.Content)) return null;
 
@@ -199,20 +323,24 @@ public sealed class TeamsSourceTask : SourceTask
 
         var value = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(messageData));
 
+        // The cursor carried by a record is the resume point that is safe if this record is the
+        // last one committed - the group it belongs to is replayed instead of being skipped.
+        var sourceOffset = new Dictionary<string, object>
+        {
+            ["offset"] = offset,
+            [TeamsConnectorConfig.OffsetCursor] = groupCursor.ToString("O", CultureInfo.InvariantCulture),
+            [TeamsConnectorConfig.OffsetMessageId] = message.Id ?? ""
+        };
+
+        if (parentId != null)
+            sourceOffset[TeamsConnectorConfig.OffsetParentMessageId] = parentId;
+
         return new SourceRecord
         {
             Topic = _topic,
             Partition = 0,
-            SourcePartition = new Dictionary<string, object>
-            {
-                ["teamId"] = _teamId,
-                ["channelId"] = _channelId
-            },
-            SourceOffset = new Dictionary<string, object>
-            {
-                ["offset"] = offset,
-                ["messageId"] = message.Id ?? ""
-            },
+            SourcePartition = new Dictionary<string, object>(_sourcePartition),
+            SourceOffset = sourceOffset,
             Key = message.Id != null ? Encoding.UTF8.GetBytes(message.Id) : null,
             Value = value,
             Headers = headers,

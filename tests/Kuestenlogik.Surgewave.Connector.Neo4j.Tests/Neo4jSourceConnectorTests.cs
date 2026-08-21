@@ -306,4 +306,24 @@ public class Neo4jSourceTaskTests
 
         Assert.Null(exception);
     }
+
+    [Fact]
+    public async Task PollAsync_SurfacesQueryFailureViaRaiseError()
+    {
+        var errors = new List<Exception>();
+        using var task = new Neo4jSourceTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+        task.Start(new Dictionary<string, string>
+        {
+            // Nothing is listening on this port, so the query fails.
+            [Neo4jConnectorConfig.UriConfig] = "bolt://127.0.0.1:1",
+            [Neo4jConnectorConfig.LabelConfig] = "Person",
+            [Neo4jConnectorConfig.PollIntervalMsConfig] = "0"
+        });
+
+        var records = await task.PollAsync(CancellationToken.None);
+
+        Assert.Empty(records);
+        Assert.Single(errors);
+    }
 }

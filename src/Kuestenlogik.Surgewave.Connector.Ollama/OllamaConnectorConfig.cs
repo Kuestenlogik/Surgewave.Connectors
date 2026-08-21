@@ -15,6 +15,7 @@ public static class OllamaConnectorConfig
 
     // Output
     public const string WebhookUrlConfig = "webhook.url";
+    public const string OutputTopicConfig = "output.topic";
 
     // Mode
     public const string ModeConfig = "mode";

@@ -25,7 +25,8 @@ public sealed class MirrorHeartbeatTask : SourceTask
     {
         _sourceClusterAlias = GetConfig(config, "source.cluster.alias", "source");
         _targetClusterAlias = GetConfig(config, "target.cluster.alias", "target");
-        _heartbeatsTopic = GetConfig(config, "heartbeats.topic", "heartbeats");
+        // Empty means "let the replication policy name the topic"
+        _heartbeatsTopic = GetConfig(config, "heartbeats.topic", "");
         _intervalMs = int.Parse(GetConfig(config, "heartbeats.interval.ms", "1000"));
 
         _policy = ReplicationPolicyFactory.Create(
@@ -71,7 +72,9 @@ public sealed class MirrorHeartbeatTask : SourceTask
             {
                 ["timestamp"] = heartbeat.Timestamp
             },
-            Topic = _policy.HeartbeatTopic(_sourceClusterAlias),
+            Topic = string.IsNullOrEmpty(_heartbeatsTopic)
+                ? _policy.HeartbeatTopic(_sourceClusterAlias)
+                : _heartbeatsTopic,
             Key = key,
             Value = value,
             Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(heartbeat.Timestamp),

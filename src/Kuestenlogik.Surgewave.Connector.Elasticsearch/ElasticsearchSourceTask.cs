@@ -27,6 +27,9 @@ public sealed class ElasticsearchSourceTask : SourceTask
     private string _incrementalField = ElasticsearchConnectorConfig.DefaultIncrementalField;
     private DateTimeOffset _lastPollTime = DateTimeOffset.MinValue;
 
+    // Parsed 'query' when it was supplied as DSL JSON instead of a query string
+    private Query? _dslQuery;
+
     // Scroll state
     private string? _scrollId;
     private List<FieldValue>? _lastSortValues;
@@ -54,8 +57,45 @@ public sealed class ElasticsearchSourceTask : SourceTask
         _sourcePartition["index"] = _index;
         _sourcePartition["query"] = _query;
 
+        // A DSL body is parsed once here so a malformed query fails at startup instead of
+        // silently degrading to match-all at poll time.
+        _dslQuery = ParseDslQuery(_query);
+
         // Restore offsets if available
         RestoreOffsets();
+    }
+
+    /// <summary>
+    /// Parses a query supplied as DSL JSON. Accepts both a bare query clause
+    /// ('{"term":{...}}') and a full search body ('{"query":{...}}').
+    /// Returns null when the configured query is a plain query string.
+    /// </summary>
+    private Query? ParseDslQuery(string query)
+    {
+        if (!query.TrimStart().StartsWith('{'))
+            return null;
+
+        try
+        {
+            var clause = query;
+
+            using (var document = JsonDocument.Parse(query))
+            {
+                if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                    document.RootElement.TryGetProperty("query", out var inner))
+                {
+                    clause = inner.GetRawText();
+                }
+            }
+
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(clause));
+            return _client!.RequestResponseSerializer.Deserialize<Query>(stream);
+        }
+        catch (Exception ex)
+        {
+            throw new ArgumentException(
+                $"{ElasticsearchConnectorConfig.QueryConfig} is not a valid Elasticsearch query DSL document", ex);
+        }
     }
 
     private static ElasticsearchClient CreateClient(IDictionary<string, string> config)
@@ -226,7 +266,10 @@ public sealed class ElasticsearchSourceTask : SourceTask
                 cancellationToken);
 
             if (!searchResponse.IsValidResponse)
+            {
+                RaiseSearchError("scroll search", searchResponse.DebugInformation);
                 return records;
+            }
 
             _scrollId = searchResponse.ScrollId?.ToString();
             records.AddRange(ConvertHits(searchResponse.Hits));
@@ -240,6 +283,7 @@ public sealed class ElasticsearchSourceTask : SourceTask
 
             if (!scrollResponse.IsValidResponse)
             {
+                RaiseSearchError("scroll", scrollResponse.DebugInformation);
                 _scrollId = null; // Reset on error
                 return records;
             }
@@ -278,7 +322,10 @@ public sealed class ElasticsearchSourceTask : SourceTask
         var response = await _client.SearchAsync<JsonDocument>(searchRequest, cancellationToken);
 
         if (!response.IsValidResponse)
+        {
+            RaiseSearchError("search", response.DebugInformation);
             return [];
+        }
 
         var records = ConvertHits(response.Hits);
 
@@ -298,22 +345,31 @@ public sealed class ElasticsearchSourceTask : SourceTask
         return records;
     }
 
+    /// <summary>
+    /// Makes a rejected search visible instead of returning an empty stream forever.
+    /// </summary>
+    private void RaiseSearchError(string operation, string debugInformation)
+        => Context?.RaiseError?.Invoke(new InvalidOperationException(
+            $"Elasticsearch {operation} on index '{_index}' failed: {debugInformation}"));
+
     private Query BuildQuery()
     {
         Query baseQuery;
 
         // Parse query - either simple query string or DSL JSON
-        if (_query.TrimStart().StartsWith('{'))
+        if (_dslQuery != null)
         {
-            // Use query string query with the DSL as is
-            baseQuery = new QueryStringQuery { Query = "*" };
+            // Use the DSL document the user configured
+            baseQuery = _dslQuery;
+        }
+        else if (_query == "*")
+        {
+            baseQuery = new MatchAllQuery();
         }
         else
         {
             // Simple query string
-            baseQuery = _query == "*"
-                ? new MatchAllQuery()
-                : new QueryStringQuery { Query = _query };
+            baseQuery = new QueryStringQuery { Query = _query };
         }
 
         // Add timestamp filter for incremental mode
@@ -322,7 +378,9 @@ public sealed class ElasticsearchSourceTask : SourceTask
             return new BoolQuery
             {
                 Must = [baseQuery],
-                Filter = [new TermQuery { Field = new Field(_incrementalField), Value = _lastTimestampValue }]
+                // Strictly greater than the cursor - an equality filter would never return
+                // anything newer than the last document already exported.
+                Filter = [new UntypedRangeQuery { Field = new Field(_incrementalField), Gt = _lastTimestampValue }]
             };
         }
 

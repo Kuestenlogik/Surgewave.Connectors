@@ -4,7 +4,7 @@ using Kuestenlogik.Surgewave.Plugins.Configuration;
 namespace Kuestenlogik.Surgewave.Connector.Facebook;
 
 /// <summary>
-/// Source connector that receives events from Facebook pages via webhooks or polling.
+/// Source connector that receives events from Facebook pages via webhooks.
 /// </summary>
 [ConnectorMetadata(
     Name = "facebook-source",
@@ -22,22 +22,16 @@ public sealed class FacebookSourceConnector : SourceConnector
     public override ConfigDef Config => new ConfigDef()
         .Define(FacebookConnectorConfig.Topic, ConfigType.String, Importance.High,
             "Destination topic for Facebook events", EditorHint.Topic)
-        .Define(FacebookConnectorConfig.AccessToken, ConfigType.Password, Importance.High,
-            "Facebook Page access token")
         .Define(FacebookConnectorConfig.PageId, ConfigType.String, Importance.High,
             "Facebook Page ID to monitor")
-        .Define(FacebookConnectorConfig.ApiVersion, ConfigType.String, FacebookConnectorConfig.DefaultApiVersion, Importance.Medium,
-            "Graph API version")
+        .Define(FacebookConnectorConfig.AppSecret, ConfigType.Password, Importance.High,
+            "Facebook App secret - when set, X-Hub-Signature-256 on every webhook POST is verified")
         .Define(FacebookConnectorConfig.WebhookVerifyToken, ConfigType.Password, Importance.High,
             "Token for webhook verification")
         .Define(FacebookConnectorConfig.WebhookPort, ConfigType.Int, FacebookConnectorConfig.DefaultWebhookPort, Importance.Medium,
             "Port for webhook HTTP server")
         .Define(FacebookConnectorConfig.WebhookPath, ConfigType.String, FacebookConnectorConfig.DefaultWebhookPath, Importance.Medium,
-            "Path for webhook endpoint")
-        .Define(FacebookConnectorConfig.IncludeComments, ConfigType.Boolean, FacebookConnectorConfig.DefaultIncludeComments, Importance.Low,
-            "Include post comments")
-        .Define(FacebookConnectorConfig.IncludeReactions, ConfigType.Boolean, FacebookConnectorConfig.DefaultIncludeReactions, Importance.Low,
-            "Include post reactions");
+            "Path for webhook endpoint");
 
     public override void Start(IDictionary<string, string> config)
     {

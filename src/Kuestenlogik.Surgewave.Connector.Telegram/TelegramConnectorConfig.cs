@@ -24,12 +24,16 @@ public static class TelegramConnectorConfig
     public const string DisableNotification = "telegram.disable.notification";
     public const string DisableWebPagePreview = "telegram.disable.web.page.preview";
 
-    // Webhook settings
-    public const string WebhookUrl = "telegram.webhook.url";
-    public const string WebhookPort = "telegram.webhook.port";
+    // Source partition / offset keys
+    public const string PartitionSource = "source";
+    public const string PartitionBotId = "bot_id";
+    public const string OffsetUpdateId = "update_id";
+
+    // Polling mode values (webhook delivery is not implemented)
+    public const string PollingModeLongPolling = "long-polling";
 
     // Defaults
     public const string DefaultMessageTypes = "all";
-    public const string DefaultPollingMode = "long-polling";
+    public const string DefaultPollingMode = PollingModeLongPolling;
     public const string DefaultParseMode = "Markdown";
 }

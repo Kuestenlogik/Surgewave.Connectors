@@ -8,7 +8,7 @@ namespace Kuestenlogik.Surgewave.Connector.Weather;
 /// </summary>
 [ConnectorMetadata(
     Name = "weather-source",
-    Description = "Polls weather conditions, forecasts, and alerts from weather APIs",
+    Description = "Polls weather conditions and forecasts from weather APIs",
     Author = "Surgewave",
     Tags = "weather, api, source, forecast, conditions")]
 public sealed class WeatherSourceConnector : SourceConnector
@@ -21,11 +21,11 @@ public sealed class WeatherSourceConnector : SourceConnector
         .Define(WeatherConnectorConfig.Topic, ConfigType.String, Importance.High,
             "Surgewave topic to produce weather data to", EditorHint.Topic)
         .Define(WeatherConnectorConfig.Provider, ConfigType.String, WeatherConnectorConfig.DefaultProvider,
-            Importance.High, "Weather provider: openweathermap, open-meteo, nws")
+            Importance.High, $"Weather provider: {WeatherConnectorConfig.SupportedProviders}")
         .Define(WeatherConnectorConfig.ApiKey, ConfigType.Password, "", Importance.High,
             "API key for weather provider (required for OpenWeatherMap)")
         .Define(WeatherConnectorConfig.Locations, ConfigType.List, "", Importance.High,
-            "Comma-separated list of locations (city names or lat,lon)")
+            "Comma-separated list of locations: city names, 'lat;lon' pairs, or a single 'lat,lon' pair (e.g. Berlin,52.52;13.41)")
         .Define(WeatherConnectorConfig.Latitude, ConfigType.String, "", Importance.Medium,
             "Latitude for single location")
         .Define(WeatherConnectorConfig.Longitude, ConfigType.String, "", Importance.Medium,
@@ -33,7 +33,7 @@ public sealed class WeatherSourceConnector : SourceConnector
         .Define(WeatherConnectorConfig.Units, ConfigType.String, WeatherConnectorConfig.DefaultUnits,
             Importance.Medium, "Units: metric, imperial, standard")
         .Define(WeatherConnectorConfig.DataTypes, ConfigType.String, WeatherConnectorConfig.DefaultDataTypes,
-            Importance.Medium, "Data types: current, forecast, alerts, all")
+            Importance.Medium, $"Data types: {WeatherConnectorConfig.SupportedDataTypes}")
         .Define(WeatherConnectorConfig.PollIntervalMs, ConfigType.Int,
             WeatherConnectorConfig.DefaultPollIntervalMs.ToString(), Importance.Medium,
             "Poll interval in milliseconds")
@@ -55,7 +55,10 @@ public sealed class WeatherSourceConnector : SourceConnector
             throw new ArgumentException($"'{WeatherConnectorConfig.Topic}' is required");
         }
 
-        var provider = config.TryGetValue(WeatherConnectorConfig.Provider, out var prov) ? prov : "openweathermap";
+        var provider = config.TryGetValue(WeatherConnectorConfig.Provider, out var prov) && !string.IsNullOrWhiteSpace(prov)
+            ? prov : WeatherConnectorConfig.DefaultProvider;
+        WeatherConnectorConfig.ValidateProvider(provider);
+
         if (provider == "openweathermap")
         {
             if (!config.TryGetValue(WeatherConnectorConfig.ApiKey, out var apiKey) ||
@@ -63,6 +66,11 @@ public sealed class WeatherSourceConnector : SourceConnector
             {
                 throw new ArgumentException($"'{WeatherConnectorConfig.ApiKey}' is required for OpenWeatherMap");
             }
+        }
+
+        if (config.TryGetValue(WeatherConnectorConfig.DataTypes, out var dataTypes) && !string.IsNullOrWhiteSpace(dataTypes))
+        {
+            WeatherConnectorConfig.ValidateDataTypes(dataTypes);
         }
 
         var hasLocations = config.TryGetValue(WeatherConnectorConfig.Locations, out var locs) && !string.IsNullOrWhiteSpace(locs);

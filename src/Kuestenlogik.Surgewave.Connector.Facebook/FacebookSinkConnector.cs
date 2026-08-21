@@ -29,7 +29,9 @@ public sealed class FacebookSinkConnector : SinkConnector
         .Define(FacebookConnectorConfig.MessageField, ConfigType.String, "message", Importance.Medium,
             "JSON field containing post message")
         .Define(FacebookConnectorConfig.LinkField, ConfigType.String, Importance.Low,
-            "JSON field containing link URL")
+            "JSON field containing link URL (feed posts only)")
+        .Define(FacebookConnectorConfig.ImageUrlField, ConfigType.String, "image_url", Importance.Medium,
+            "JSON field containing the media URL - required for photo and video posts")
         .Define(FacebookConnectorConfig.PostType, ConfigType.String, "feed", Importance.Medium,
             "Post type: feed, photo, video", EditorHint.Select, options: ["feed", "photo", "video"]);
 

@@ -32,6 +32,8 @@ public static class CassandraConnectorConfig
     // Sink configs
     public const string TopicsConfig = "topics";
     public const string WriteModeConfig = "cassandra.write.mode"; // insert, upsert
+    public const string WriteModeInsert = "insert";
+    public const string WriteModeUpsert = "upsert";
     public const string BatchSizeConfig = "cassandra.batch.size";
     public const string MaxRetryCountConfig = "cassandra.max.retry.count";
     public const string RetryDelayMsConfig = "cassandra.retry.delay.ms";
@@ -66,4 +68,5 @@ public static class CassandraConnectorConfig
     public const string OffsetPartitionKey = "partition_key";
     public const string OffsetClusteringKey = "clustering_key";
     public const string OffsetTable = "table";
+    public const string OffsetPagingState = "paging_state";
 }

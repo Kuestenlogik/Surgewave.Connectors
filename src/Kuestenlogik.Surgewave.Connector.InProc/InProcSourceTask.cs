@@ -1,7 +1,8 @@
+using System.Buffers.Binary;
+using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using System.IO.Pipes;
 using System.Runtime.Versioning;
-using System.Text;
 using System.Threading.Channels;
 using Kuestenlogik.Surgewave.Connect;
 
@@ -20,8 +21,13 @@ public sealed class InProcSourceTask : SourceTask
     private NamedPipeClientStream? _pipeClient;
     private MemoryMappedFile? _mmf;
     private MemoryMappedViewAccessor? _accessor;
-    private int _sharedMemorySize;
+    private int _ringCapacity;
+    private long _pendingReadPosition;
+    private long _committedReadPosition;
+    private readonly byte[] _lengthBuffer = new byte[InProcSharedMemoryRing.LengthPrefixSize];
     private long _offset;
+
+    private const int MaxRecordsPerPoll = 1000;
     private CancellationTokenSource? _cts;
     private Task? _pipeTask;
     private readonly Channel<InProcMessage> _pipeBuffer = System.Threading.Channels.Channel.CreateBounded<InProcMessage>(
@@ -180,26 +186,53 @@ public sealed class InProcSourceTask : SourceTask
     {
         if (_accessor == null) return;
 
-        // Read from shared memory using a simple protocol:
-        // [4 bytes: length][length bytes: data]
-        // Length of 0 means no data
-        var position = 0;
-        while (position < _sharedMemorySize - 4)
-        {
-            var length = _accessor.ReadInt32(position);
-            if (length <= 0) break;
+        // Read length-prefixed frames from the ring, resuming at the cursor instead of
+        // restarting at 0 (which re-emitted every message on every poll).
+        var writePosition = _accessor.ReadInt64(InProcSharedMemoryRing.WritePositionOffset);
 
-            position += 4;
-            if (position + length > _sharedMemorySize) break;
+        while (_pendingReadPosition < writePosition && records.Count < MaxRecordsPerPoll)
+        {
+            if (writePosition - _pendingReadPosition < InProcSharedMemoryRing.LengthPrefixSize)
+                break;
+
+            InProcSharedMemoryRing.Read(_accessor, _ringCapacity, _pendingReadPosition,
+                _lengthBuffer, 0, InProcSharedMemoryRing.LengthPrefixSize);
+            var length = BinaryPrimitives.ReadInt32LittleEndian(_lengthBuffer);
+
+            if (length <= 0 || length > _ringCapacity - InProcSharedMemoryRing.LengthPrefixSize)
+            {
+                // Corrupt frame: resynchronize on the writer instead of looping forever.
+                Context?.RaiseError?.Invoke(new InvalidDataException(
+                    $"Shared memory frame at {_pendingReadPosition} declares {length} bytes; " +
+                    $"skipping ahead to the writer position {writePosition}."));
+                _pendingReadPosition = writePosition;
+                break;
+            }
+
+            if (writePosition - _pendingReadPosition < InProcSharedMemoryRing.LengthPrefixSize + length)
+                break; // frame not fully published yet
 
             var data = new byte[length];
-            _accessor.ReadArray(position, data, 0, length);
-            position += length;
+            InProcSharedMemoryRing.Read(_accessor, _ringCapacity,
+                _pendingReadPosition + InProcSharedMemoryRing.LengthPrefixSize, data, 0, length);
+            _pendingReadPosition += InProcSharedMemoryRing.LengthPrefixSize + length;
 
             records.Add(CreateRecord(new InProcMessage { Value = data }));
-
-            if (records.Count >= 1000) break;
         }
+    }
+
+    public override Task CommitAsync(CancellationToken cancellationToken)
+    {
+        // Publishing the read cursor releases the space for the writer, so it may only
+        // happen after the polled records have been produced.
+        if (_accessor != null && _pendingReadPosition > _committedReadPosition)
+        {
+            _committedReadPosition = _pendingReadPosition;
+            _accessor.Write(InProcSharedMemoryRing.ReadPositionOffset, _committedReadPosition);
+            _accessor.Flush();
+        }
+
+        return Task.CompletedTask;
     }
 
     private async Task ReadPipeLoopAsync(CancellationToken cancellationToken)
@@ -265,9 +298,26 @@ public sealed class InProcSourceTask : SourceTask
     private void InitializeSharedMemory(IDictionary<string, string> config)
     {
         var sharedMemoryName = config[InProcConnectorConfig.SharedMemoryName];
-        _sharedMemorySize = int.Parse(GetConfigOrDefault(config, InProcConnectorConfig.SharedMemorySize, InProcConnectorConfig.DefaultSharedMemorySize.ToString()));
+        var configuredSize = int.Parse(
+            GetConfigOrDefault(config, InProcConnectorConfig.SharedMemorySize,
+                InProcConnectorConfig.DefaultSharedMemorySize.ToString(CultureInfo.InvariantCulture)),
+            CultureInfo.InvariantCulture);
+
         _mmf = MemoryMappedFile.OpenExisting(sharedMemoryName);
         _accessor = _mmf.CreateViewAccessor();
+        _ringCapacity = InProcSharedMemoryRing.CapacityOf(_accessor);
+
+        if (configuredSize > _accessor.Capacity)
+        {
+            throw new ArgumentException(
+                $"{InProcConnectorConfig.SharedMemorySize} is {configuredSize} bytes but the writer mapped " +
+                $"'{sharedMemoryName}' with only {_accessor.Capacity} bytes.",
+                nameof(config));
+        }
+
+        // Resume where the last committed poll left off instead of re-reading the ring.
+        _committedReadPosition = _accessor.ReadInt64(InProcSharedMemoryRing.ReadPositionOffset);
+        _pendingReadPosition = _committedReadPosition;
     }
 
     private static string GetConfigOrDefault(IDictionary<string, string> config, string key, string defaultValue)

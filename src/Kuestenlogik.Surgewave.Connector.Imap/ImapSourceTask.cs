@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using MailKit;
@@ -39,6 +41,9 @@ public class ImapSourceTask : SourceTask
     // Polling settings
     private int _batchSize = ImapConnectorConfig.DefaultBatchSize;
     private bool _useIdle = ImapConnectorConfig.DefaultUseIdle;
+    private int _pollIntervalMs = ImapConnectorConfig.DefaultPollIntervalMs;
+    private int _idleTimeoutMinutes = ImapConnectorConfig.DefaultIdleTimeoutMinutes;
+    private DateTimeOffset _lastPollTime = DateTimeOffset.MinValue;
 
     // Message handling
     private bool _markAsRead = ImapConnectorConfig.DefaultMarkAsRead;
@@ -62,6 +67,11 @@ public class ImapSourceTask : SourceTask
     // Offset tracking
     private uint _lastUid;
     private bool _initialized;
+    private IDictionary<string, object> _sourcePartition = new Dictionary<string, object>();
+
+    // UIDs of records the runtime has confirmed as produced; post-processing (mark as
+    // read / move / delete) runs for these on commit, never inside PollAsync.
+    private readonly ConcurrentQueue<UniqueId> _committedUids = new();
 
     public override string Version => "1.0.0";
 
@@ -99,6 +109,32 @@ public class ImapSourceTask : SourceTask
             !string.IsNullOrWhiteSpace(folder))
             _folderName = folder;
 
+        // A task monitors exactly one folder - accept imap.folders only when it names one.
+        if (config.TryGetValue(ImapConnectorConfig.FoldersConfig, out var folders) &&
+            !string.IsNullOrWhiteSpace(folders))
+        {
+            var folderList = folders.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (folderList.Length > 1)
+            {
+                throw new ArgumentException(
+                    $"{ImapConnectorConfig.FoldersConfig} lists {folderList.Length} folders, but this connector " +
+                    $"monitors exactly one. Use {ImapConnectorConfig.FolderConfig} or run one connector per folder.",
+                    nameof(config));
+            }
+
+            if (folderList.Length == 1)
+                _folderName = folderList[0];
+        }
+
+        if (config.TryGetValue(ImapConnectorConfig.RecursiveConfig, out var recursiveStr) &&
+            bool.TryParse(recursiveStr, out var recursive) && recursive)
+        {
+            throw new ArgumentException(
+                $"{ImapConnectorConfig.RecursiveConfig} is not supported: only the folder named by " +
+                $"{ImapConnectorConfig.FolderConfig} is monitored.",
+                nameof(config));
+        }
+
         // Polling settings
         if (config.TryGetValue(ImapConnectorConfig.BatchSizeConfig, out var batchStr) &&
             int.TryParse(batchStr, out var batch))
@@ -107,6 +143,16 @@ public class ImapSourceTask : SourceTask
         if (config.TryGetValue(ImapConnectorConfig.UseIdleConfig, out var useIdleStr) &&
             bool.TryParse(useIdleStr, out var useIdle))
             _useIdle = useIdle;
+
+        if (config.TryGetValue(ImapConnectorConfig.PollIntervalMsConfig, out var pollIntervalStr) &&
+            int.TryParse(pollIntervalStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var pollInterval) &&
+            pollInterval > 0)
+            _pollIntervalMs = pollInterval;
+
+        if (config.TryGetValue(ImapConnectorConfig.IdleTimeoutMinutesConfig, out var idleTimeoutStr) &&
+            int.TryParse(idleTimeoutStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out var idleTimeout) &&
+            idleTimeout > 0)
+            _idleTimeoutMinutes = idleTimeout;
 
         // Message handling
         if (config.TryGetValue(ImapConnectorConfig.MarkAsReadConfig, out var markReadStr) &&
@@ -158,6 +204,39 @@ public class ImapSourceTask : SourceTask
         if (config.TryGetValue(ImapConnectorConfig.PreferHtmlConfig, out var preferHtmlStr) &&
             bool.TryParse(preferHtmlStr, out var preferHtml))
             _preferHtml = preferHtml;
+
+        _sourcePartition = new Dictionary<string, object>
+        {
+            ["host"] = _host,
+            ["folder"] = _folderName
+        };
+
+        RestoreOffset();
+    }
+
+    /// <summary>
+    /// Resumes at the last committed UID so a restart does not re-emit the mailbox.
+    /// </summary>
+    private void RestoreOffset()
+    {
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+
+        if (storedOffset == null ||
+            !storedOffset.TryGetValue(ImapConnectorConfig.OffsetUid, out var storedUid) ||
+            storedUid == null)
+        {
+            return;
+        }
+
+        try
+        {
+            _lastUid = Convert.ToUInt32(storedUid, CultureInfo.InvariantCulture);
+            _initialized = _lastUid > 0;
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+        {
+            Context?.RaiseError?.Invoke(ex);
+        }
     }
 
     public override void Stop()
@@ -204,6 +283,9 @@ public class ImapSourceTask : SourceTask
         if (_folder == null)
             return records;
 
+        await WaitForNextPollAsync(cancellationToken);
+        _lastPollTime = DateTimeOffset.UtcNow;
+
         // Build search query
         var query = BuildSearchQuery();
 
@@ -233,8 +315,6 @@ public class ImapSourceTask : SourceTask
             MessageSummaryItems.Size | MessageSummaryItems.InternalDate,
             cancellationToken);
 
-        var processedUids = new List<UniqueId>();
-
         foreach (var summary in messageSummaries.OrderBy(s => s.UniqueId.Id))
         {
             // Apply additional filters that couldn't be done server-side
@@ -246,32 +326,94 @@ public class ImapSourceTask : SourceTask
                 var message = await _folder.GetMessageAsync(summary.UniqueId, cancellationToken);
                 var record = CreateSourceRecord(summary, message);
                 records.Add(record);
-                processedUids.Add(summary.UniqueId);
 
                 if (summary.UniqueId.Id > _lastUid)
                     _lastUid = summary.UniqueId.Id;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                // Log error and continue with next message
-                Console.Error.WriteLine($"Error processing message UID {summary.UniqueId}: {ex.Message}");
+                // Poison message: skip it, but surface the failure instead of hiding it.
+                Context?.RaiseError?.Invoke(ex);
             }
         }
 
-        // Handle post-processing (mark as read, delete, move)
-        if (processedUids.Count > 0)
-        {
-            await PostProcessMessagesAsync(processedUids, cancellationToken);
-        }
-
+        // Post-processing deliberately does NOT run here: deleting or moving a message
+        // before it is durably produced would lose it on a crash. See CommitAsync.
         _initialized = true;
         return records;
     }
 
-    public override Task CommitAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Honors imap.poll.interval.ms, or waits for the server's new-mail notification when
+    /// imap.use.idle is enabled and the server announces the IDLE capability.
+    /// </summary>
+    private async Task WaitForNextPollAsync(CancellationToken cancellationToken)
     {
-        // Offset is tracked in memory - could persist to external store if needed
-        return Task.CompletedTask;
+        var remainingMs = _pollIntervalMs - (DateTimeOffset.UtcNow - _lastPollTime).TotalMilliseconds;
+
+        // The interval has already elapsed (this includes the very first poll): fetch now.
+        if (remainingMs <= 0)
+            return;
+
+        if (_useIdle && _client is { IsConnected: true, IsAuthenticated: true } client &&
+            client.Capabilities.HasFlag(ImapCapabilities.Idle))
+        {
+            using var done = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            done.CancelAfter(TimeSpan.FromMinutes(_idleTimeoutMinutes));
+
+            try
+            {
+                await client.IdleAsync(done.Token, cancellationToken);
+                return;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Idle timeout elapsed - poll again.
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The server refused IDLE: fall back to interval polling from now on.
+                _useIdle = false;
+                Context?.RaiseError?.Invoke(ex);
+            }
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(remainingMs), cancellationToken);
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        if (!record.SourceOffset.TryGetValue(ImapConnectorConfig.OffsetUid, out var uidValue) || uidValue == null)
+            return;
+
+        try
+        {
+            _committedUids.Enqueue(new UniqueId(Convert.ToUInt32(uidValue, CultureInfo.InvariantCulture)));
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
+        {
+            Context?.RaiseError?.Invoke(ex);
+        }
+    }
+
+    public override async Task CommitAsync(CancellationToken cancellationToken)
+    {
+        // Only now - after the records have been produced - may the mailbox be mutated.
+        var uids = new List<UniqueId>();
+        while (_committedUids.TryDequeue(out var uid))
+            uids.Add(uid);
+
+        if (uids.Count == 0)
+            return;
+
+        await PostProcessMessagesAsync(uids, cancellationToken);
     }
 
     /// <summary>
@@ -453,11 +595,7 @@ public class ImapSourceTask : SourceTask
 
         return new SourceRecord
         {
-            SourcePartition = new Dictionary<string, object>
-            {
-                ["host"] = _host,
-                ["folder"] = _folderName
-            },
+            SourcePartition = _sourcePartition,
             SourceOffset = new Dictionary<string, object>
             {
                 [ImapConnectorConfig.OffsetUid] = summary.UniqueId.Id,
@@ -476,9 +614,9 @@ public class ImapSourceTask : SourceTask
         };
     }
 
-    private async Task PostProcessMessagesAsync(List<UniqueId> uids, CancellationToken cancellationToken)
+    private async Task PostProcessMessagesAsync(IList<UniqueId> uids, CancellationToken cancellationToken)
     {
-        if (_folder == null)
+        if (_folder == null || _client is not { IsConnected: true })
             return;
 
         try
@@ -499,9 +637,15 @@ public class ImapSourceTask : SourceTask
                 await _folder.ExpungeAsync(cancellationToken);
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Error post-processing messages: {ex.Message}");
+            // The records are already produced, so a cleanup failure must not fail the
+            // task - surface it instead of writing it to the console.
+            Context?.RaiseError?.Invoke(ex);
         }
     }
 }

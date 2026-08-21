@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -13,12 +14,15 @@ namespace Kuestenlogik.Surgewave.Connector.HttpServer;
 
 /// <summary>
 /// Source task that runs an embedded HTTP server to receive requests.
+/// Accepted requests are parked in an in-memory queue until the next poll, so the
+/// 202 response means "queued for production", not "durably stored". The queue is
+/// bounded (<see cref="HttpServerConnectorConfig.SourceMaxQueueSize"/>): once it is
+/// full, further requests are rejected with 503 instead of piling up in memory.
 /// </summary>
 public sealed class HttpServerSourceTask : SourceTask
 {
     public override string Version => "1.0.0";
 
-    private IDictionary<string, string> _config = new Dictionary<string, string>();
     private string _topic = "";
     private string _sourcePath = "";
     private HashSet<string> _allowedMethods = new(StringComparer.OrdinalIgnoreCase);
@@ -32,12 +36,13 @@ public sealed class HttpServerSourceTask : SourceTask
 
     private WebApplication? _app;
     private readonly ConcurrentQueue<SourceRecord> _pendingRecords = new();
+    private int _pendingCount;
+    private int _maxQueueSize = HttpServerConnectorConfig.DefaultSourceMaxQueueSize;
+    private string _serverId = "";
     private long _messageCounter;
 
     public override void Start(IDictionary<string, string> config)
     {
-        _config = config;
-
         // Parse configuration
         _topic = config[HttpServerConnectorConfig.SourceTopic];
 
@@ -45,6 +50,14 @@ public sealed class HttpServerSourceTask : SourceTask
         var port = config.TryGetValue(HttpServerConnectorConfig.Port, out var p) && int.TryParse(p, out var portNum)
             ? portNum : HttpServerConnectorConfig.DefaultPort;
         var basePath = config.TryGetValue(HttpServerConnectorConfig.BasePath, out var bp) ? bp.TrimEnd('/') : HttpServerConnectorConfig.DefaultBasePath;
+
+        // Task configs are not merged with the ConfigDef defaults, so the source partition
+        // is derived from the effective host/port resolved here - never from raw lookups.
+        _serverId = $"{host}:{port.ToString(CultureInfo.InvariantCulture)}";
+
+        _maxQueueSize = config.TryGetValue(HttpServerConnectorConfig.SourceMaxQueueSize, out var mq)
+            && int.TryParse(mq, NumberStyles.Integer, CultureInfo.InvariantCulture, out var maxQueue) && maxQueue > 0
+            ? maxQueue : HttpServerConnectorConfig.DefaultSourceMaxQueueSize;
 
         _sourcePath = config.TryGetValue(HttpServerConnectorConfig.SourcePath, out var sp) ? sp : HttpServerConnectorConfig.DefaultSourcePath;
         if (!_sourcePath.StartsWith('/')) _sourcePath = "/" + _sourcePath;
@@ -177,11 +190,19 @@ public sealed class HttpServerSourceTask : SourceTask
             message["query"] = queryParams;
         }
 
+        // Back-pressure: an accepted record only lives in memory until the next poll,
+        // so refuse the request instead of queueing more than we are willing to hold.
+        if (Interlocked.Increment(ref _pendingCount) > _maxQueueSize)
+        {
+            Interlocked.Decrement(ref _pendingCount);
+            return Results.StatusCode((int)HttpStatusCode.ServiceUnavailable);
+        }
+
         // Create source record
         var messageId = Interlocked.Increment(ref _messageCounter);
         var record = new SourceRecord
         {
-            SourcePartition = new Dictionary<string, object> { ["server"] = $"{_config[HttpServerConnectorConfig.Host]}:{_config[HttpServerConnectorConfig.Port]}" },
+            SourcePartition = new Dictionary<string, object> { ["server"] = _serverId },
             SourceOffset = new Dictionary<string, object> { ["message_id"] = messageId },
             Topic = _topic,
             Value = JsonSerializer.SerializeToUtf8Bytes(message),
@@ -248,6 +269,7 @@ public sealed class HttpServerSourceTask : SourceTask
         while (_pendingRecords.TryDequeue(out var record))
         {
             records.Add(record);
+            Interlocked.Decrement(ref _pendingCount);
         }
 
         return Task.FromResult<IReadOnlyList<SourceRecord>>(records);

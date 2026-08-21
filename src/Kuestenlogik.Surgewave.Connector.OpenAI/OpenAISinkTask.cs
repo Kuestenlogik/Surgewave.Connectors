@@ -1,6 +1,7 @@
 namespace Kuestenlogik.Surgewave.Connector.OpenAI;
 
 using System.ClientModel;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -34,8 +35,12 @@ public sealed class OpenAISinkTask : SinkTask
     private string _inputField = OpenAIConnectorConfig.DefaultInputField;
     private string _outputField = OpenAIConnectorConfig.DefaultOutputField;
     private string _webhookUrl = "";
+    private string _outputTopic = "";
+    private string _outputFormat = OpenAIConnectorConfig.FormatMerge;
     private bool _includeOriginal = OpenAIConnectorConfig.DefaultIncludeOriginal;
     private int _batchSize = OpenAIConnectorConfig.DefaultBatchSize;
+    private int _batchTimeoutMs = OpenAIConnectorConfig.DefaultBatchTimeoutMs;
+    private DateTime _firstBufferedAtUtc = DateTime.MinValue;
     private int _retryMax = OpenAIConnectorConfig.DefaultRetryMax;
     private int _retryBackoffMs = OpenAIConnectorConfig.DefaultRetryBackoffMs;
 
@@ -73,24 +78,40 @@ public sealed class OpenAISinkTask : SinkTask
 
         _mode = GetConfig(config, OpenAIConnectorConfig.ModeConfig, OpenAIConnectorConfig.ModeEmbeddings);
         _embeddingsModel = GetConfig(config, OpenAIConnectorConfig.EmbeddingsModelConfig, OpenAIConnectorConfig.DefaultEmbeddingsModel);
-        _embeddingsDimensions = int.Parse(GetConfig(config, OpenAIConnectorConfig.EmbeddingsDimensionsConfig, "0"));
+        _embeddingsDimensions = int.Parse(GetConfig(config, OpenAIConnectorConfig.EmbeddingsDimensionsConfig, "0"), CultureInfo.InvariantCulture);
         _completionsModel = GetConfig(config, OpenAIConnectorConfig.CompletionsModelConfig, OpenAIConnectorConfig.DefaultCompletionsModel);
         _systemPrompt = GetConfig(config, OpenAIConnectorConfig.SystemPromptConfig, "");
-        _maxTokens = int.Parse(GetConfig(config, OpenAIConnectorConfig.MaxTokensConfig, OpenAIConnectorConfig.DefaultMaxTokens.ToString()));
-        _temperature = float.Parse(GetConfig(config, OpenAIConnectorConfig.TemperatureConfig, OpenAIConnectorConfig.DefaultTemperature.ToString()));
+        _maxTokens = int.Parse(GetConfig(config, OpenAIConnectorConfig.MaxTokensConfig, OpenAIConnectorConfig.DefaultMaxTokens.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _temperature = float.Parse(GetConfig(config, OpenAIConnectorConfig.TemperatureConfig, OpenAIConnectorConfig.DefaultTemperature.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
         _inputField = GetConfig(config, OpenAIConnectorConfig.InputFieldConfig, OpenAIConnectorConfig.DefaultInputField);
         _outputField = GetConfig(config, OpenAIConnectorConfig.OutputFieldConfig, OpenAIConnectorConfig.DefaultOutputField);
-        _webhookUrl = GetConfig(config, "webhook.url", "");
+        _webhookUrl = GetConfig(config, OpenAIConnectorConfig.WebhookUrlConfig, "");
+        _outputTopic = GetConfig(config, OpenAIConnectorConfig.OutputTopicConfig, "");
+        _outputFormat = GetConfig(config, OpenAIConnectorConfig.OutputFormatConfig, OpenAIConnectorConfig.FormatMerge);
         _includeOriginal = bool.Parse(GetConfig(config, OpenAIConnectorConfig.IncludeOriginalConfig, OpenAIConnectorConfig.DefaultIncludeOriginal.ToString()));
-        _batchSize = int.Parse(GetConfig(config, OpenAIConnectorConfig.BatchSizeConfig, OpenAIConnectorConfig.DefaultBatchSize.ToString()));
-        _retryMax = int.Parse(GetConfig(config, OpenAIConnectorConfig.RetryMaxConfig, OpenAIConnectorConfig.DefaultRetryMax.ToString()));
-        _retryBackoffMs = int.Parse(GetConfig(config, OpenAIConnectorConfig.RetryBackoffMsConfig, OpenAIConnectorConfig.DefaultRetryBackoffMs.ToString()));
+        _batchSize = int.Parse(GetConfig(config, OpenAIConnectorConfig.BatchSizeConfig, OpenAIConnectorConfig.DefaultBatchSize.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _batchTimeoutMs = int.Parse(GetConfig(config, OpenAIConnectorConfig.BatchTimeoutMsConfig, OpenAIConnectorConfig.DefaultBatchTimeoutMs.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _retryMax = int.Parse(GetConfig(config, OpenAIConnectorConfig.RetryMaxConfig, OpenAIConnectorConfig.DefaultRetryMax.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _retryBackoffMs = int.Parse(GetConfig(config, OpenAIConnectorConfig.RetryBackoffMsConfig, OpenAIConnectorConfig.DefaultRetryBackoffMs.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+
+        if (_outputFormat is not (OpenAIConnectorConfig.FormatJson or OpenAIConnectorConfig.FormatMerge))
+        {
+            throw new ArgumentException(
+                $"Invalid '{OpenAIConnectorConfig.OutputFormatConfig}' value '{_outputFormat}'. Must be '{OpenAIConnectorConfig.FormatJson}' or '{OpenAIConnectorConfig.FormatMerge}'.",
+                nameof(config));
+        }
+
+        if (!string.IsNullOrEmpty(_outputTopic) && Context?.Producer == null)
+        {
+            throw new InvalidOperationException(
+                $"'{OpenAIConnectorConfig.OutputTopicConfig}' is configured but this task context provides no producer to write results with.");
+        }
 
         // Speech config
         _speechModel = GetConfig(config, OpenAIConnectorConfig.SpeechModelConfig, OpenAIConnectorConfig.DefaultSpeechModel);
         _speechVoice = GetConfig(config, OpenAIConnectorConfig.SpeechVoiceConfig, OpenAIConnectorConfig.DefaultSpeechVoice);
         _speechFormat = GetConfig(config, OpenAIConnectorConfig.SpeechFormatConfig, OpenAIConnectorConfig.DefaultSpeechFormat);
-        _speechSpeed = float.Parse(GetConfig(config, OpenAIConnectorConfig.SpeechSpeedConfig, OpenAIConnectorConfig.DefaultSpeechSpeed.ToString()));
+        _speechSpeed = float.Parse(GetConfig(config, OpenAIConnectorConfig.SpeechSpeedConfig, OpenAIConnectorConfig.DefaultSpeechSpeed.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
 
         // Transcription config
         _transcriptionModel = GetConfig(config, OpenAIConnectorConfig.TranscriptionModelConfig, OpenAIConnectorConfig.DefaultTranscriptionModel);
@@ -104,7 +125,7 @@ public sealed class OpenAISinkTask : SinkTask
         _imagesSize = GetConfig(config, OpenAIConnectorConfig.ImagesSizeConfig, OpenAIConnectorConfig.DefaultImagesSize);
         _imagesQuality = GetConfig(config, OpenAIConnectorConfig.ImagesQualityConfig, OpenAIConnectorConfig.DefaultImagesQuality);
         _imagesStyle = GetConfig(config, OpenAIConnectorConfig.ImagesStyleConfig, OpenAIConnectorConfig.DefaultImagesStyle);
-        _imagesCount = int.Parse(GetConfig(config, OpenAIConnectorConfig.ImagesCountConfig, OpenAIConnectorConfig.DefaultImagesCount.ToString()));
+        _imagesCount = int.Parse(GetConfig(config, OpenAIConnectorConfig.ImagesCountConfig, OpenAIConnectorConfig.DefaultImagesCount.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
 
         // Moderation config
         _moderationModel = GetConfig(config, OpenAIConnectorConfig.ModerationModelConfig, OpenAIConnectorConfig.DefaultModerationModel);
@@ -130,8 +151,8 @@ public sealed class OpenAISinkTask : SinkTask
                 break;
         }
 
-        // HTTP client for webhook
-        if (!string.IsNullOrEmpty(_webhookUrl))
+        // HTTP client for webhook (only used when no output topic is configured)
+        if (string.IsNullOrEmpty(_outputTopic) && !string.IsNullOrEmpty(_webhookUrl))
         {
             _httpClient = new HttpClient();
         }
@@ -169,13 +190,24 @@ public sealed class OpenAISinkTask : SinkTask
         if (records.Count == 0)
             return;
 
+        if (_buffer.Count == 0)
+            _firstBufferedAtUtc = DateTime.UtcNow;
+
         _buffer.AddRange(records);
 
-        if (_buffer.Count >= _batchSize)
+        if (_buffer.Count >= _batchSize || BatchTimeoutElapsed())
         {
             await FlushBufferAsync(cancellationToken);
         }
     }
+
+    /// <summary>
+    /// True once the oldest buffered record has been waiting longer than <c>batch.timeout.ms</c>.
+    /// </summary>
+    private bool BatchTimeoutElapsed()
+        => _batchTimeoutMs > 0
+           && _buffer.Count > 0
+           && (DateTime.UtcNow - _firstBufferedAtUtc).TotalMilliseconds >= _batchTimeoutMs;
 
     public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
     {
@@ -189,6 +221,7 @@ public sealed class OpenAISinkTask : SinkTask
     {
         var batch = _buffer.ToList();
         _buffer.Clear();
+        _firstBufferedAtUtc = DateTime.MinValue;
 
         switch (_mode)
         {
@@ -235,6 +268,10 @@ public sealed class OpenAISinkTask : SinkTask
                     texts.Add(text);
                     validRecords.Add((record, json, rawValue));
                 }
+                else
+                {
+                    RaisePoisonRecord(record);
+                }
             }
             catch (JsonException)
             {
@@ -243,6 +280,10 @@ public sealed class OpenAISinkTask : SinkTask
                 {
                     texts.Add(rawValue);
                     validRecords.Add((record, null, rawValue));
+                }
+                else
+                {
+                    RaisePoisonRecord(record);
                 }
             }
         }
@@ -307,7 +348,10 @@ public sealed class OpenAISinkTask : SinkTask
             }
 
             if (string.IsNullOrEmpty(inputText))
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call OpenAI chat API with retry
             string? completion = null;
@@ -367,7 +411,10 @@ public sealed class OpenAISinkTask : SinkTask
             }
 
             if (string.IsNullOrEmpty(inputText))
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call OpenAI TTS API with retry
             byte[]? audioBytes = null;
@@ -437,7 +484,10 @@ public sealed class OpenAISinkTask : SinkTask
                 original = JsonNode.Parse(rawValue);
                 var audioBase64 = original?[_inputField]?.GetValue<string>();
                 if (string.IsNullOrEmpty(audioBase64))
+                {
+                    RaisePoisonRecord(record);
                     continue;
+                }
                 audioBytes = Convert.FromBase64String(audioBase64);
             }
             catch (JsonException)
@@ -455,7 +505,10 @@ public sealed class OpenAISinkTask : SinkTask
             }
 
             if (audioBytes.Length == 0)
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call OpenAI Whisper API with retry
             string? transcription = null;
@@ -525,7 +578,10 @@ public sealed class OpenAISinkTask : SinkTask
             }
 
             if (string.IsNullOrEmpty(prompt))
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call OpenAI DALL-E API with retry
             List<string>? imageUrls = null;
@@ -590,6 +646,10 @@ public sealed class OpenAISinkTask : SinkTask
                     texts.Add(text);
                     validRecords.Add((record, json, rawValue));
                 }
+                else
+                {
+                    RaisePoisonRecord(record);
+                }
             }
             catch (JsonException)
             {
@@ -597,6 +657,10 @@ public sealed class OpenAISinkTask : SinkTask
                 {
                     texts.Add(rawValue);
                     validRecords.Add((record, null, rawValue));
+                }
+                else
+                {
+                    RaisePoisonRecord(record);
                 }
             }
         }
@@ -680,41 +744,53 @@ public sealed class OpenAISinkTask : SinkTask
         }
     }
 
+    private void RaisePoisonRecord(SinkRecord record)
+        => Context?.RaiseError?.Invoke(new InvalidOperationException(FormattableString.Invariant(
+            $"Skipping record {record.Topic}:{record.Partition}:{record.Offset}: field '{_inputField}' is missing or empty")));
+
     private JsonNode CreateOutputJson(JsonNode? original, object result, string rawValue)
     {
-        if (original != null)
+        // 'merge' folds the result into the incoming document, 'json' always emits a new one
+        if (original != null && _outputFormat == OpenAIConnectorConfig.FormatMerge)
         {
-            // Merge result into original
             original[_outputField] = JsonValue.Create(result);
             return original;
         }
-        else
+
+        var output = new JsonObject
         {
-            // Create new document
-            var output = new JsonObject
-            {
-                [_outputField] = JsonValue.Create(result)
-            };
+            [_outputField] = JsonValue.Create(result)
+        };
 
-            if (_includeOriginal)
+        if (_includeOriginal)
+        {
+            try
             {
-                try
-                {
-                    output["original"] = JsonNode.Parse(rawValue);
-                }
-                catch (JsonException)
-                {
-                    output["original"] = rawValue;
-                }
+                output["original"] = JsonNode.Parse(rawValue);
             }
-
-            return output;
+            catch (JsonException)
+            {
+                output["original"] = rawValue;
+            }
         }
+
+        return output;
     }
 
     private async Task SendOutputAsync(JsonNode output, SinkRecord sourceRecord, CancellationToken cancellationToken)
     {
         var json = output.ToJsonString();
+
+        // Produce back to a Surgewave topic if configured
+        if (!string.IsNullOrEmpty(_outputTopic))
+        {
+            var producer = Context?.Producer
+                ?? throw new InvalidOperationException(
+                    $"'{OpenAIConnectorConfig.OutputTopicConfig}' is configured but this task context provides no producer to write results with.");
+
+            await producer.ProduceAsync(_outputTopic, sourceRecord.Key, Encoding.UTF8.GetBytes(json), cancellationToken);
+            return;
+        }
 
         // Send to webhook if configured
         if (_httpClient != null && !string.IsNullOrEmpty(_webhookUrl))
@@ -722,24 +798,32 @@ public sealed class OpenAISinkTask : SinkTask
             try
             {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                await _httpClient.PostAsync(new Uri(_webhookUrl), content, cancellationToken);
+                using var response = await _httpClient.PostAsync(new Uri(_webhookUrl), content, cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new HttpRequestException(FormattableString.Invariant(
+                        $"Webhook {_webhookUrl} rejected the result for {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} with status {(int)response.StatusCode}"));
+                }
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException ex)
             {
-                // Log error but don't fail the task
-                Context?.RaiseError?.Invoke(new Exception($"Failed to send to webhook: {_webhookUrl}"));
+                // Surface, then fail the batch so the worker can retry or route to the DLQ
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
+
+            return;
         }
-        else
-        {
-            // Default: log to console for debugging
-            Console.WriteLine($"[OpenAI] {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} -> {json[..Math.Min(200, json.Length)]}...");
-        }
+
+        // No delivery target configured: log to console for debugging
+        Console.WriteLine($"[OpenAI] {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} -> {json[..Math.Min(200, json.Length)]}...");
     }
 
     public override void Stop()
     {
         _buffer.Clear();
+        _firstBufferedAtUtc = DateTime.MinValue;
         _embeddingClient = null;
         _chatClient = null;
         _audioClient = null;

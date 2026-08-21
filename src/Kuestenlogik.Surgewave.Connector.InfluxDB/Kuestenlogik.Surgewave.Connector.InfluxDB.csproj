@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.InfluxDB.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="InfluxDB.Client" />
   </ItemGroup>
   <ItemGroup>

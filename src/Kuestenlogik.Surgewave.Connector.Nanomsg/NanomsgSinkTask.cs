@@ -71,7 +71,13 @@ public sealed class NanomsgSinkTask : SinkTask
 
     public override Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
-        if (_socket is not ISendSocket sendSocket) return Task.CompletedTask;
+        if (_socket is not ISendSocket sendSocket)
+        {
+            var notSendable = new InvalidOperationException(
+                $"nanomsg socket type '{_socketType}' cannot send - the task is not started or was configured with a receive-only socket.");
+            Context?.RaiseError?.Invoke(notSendable);
+            throw notSendable;
+        }
 
         foreach (var record in records)
         {
@@ -84,8 +90,9 @@ public sealed class NanomsgSinkTask : SinkTask
                 // Handle request-reply patterns
                 if (_socket is RequestSocket && _socket is IReceiveSocket reqReceiver)
                 {
-                    // Wait for reply (required for REQ/REP pattern)
-                    try { reqReceiver.Receive(); } catch { }
+                    // Wait for reply (required for REQ/REP pattern). A missing reply means the
+                    // send was never confirmed, so it must not count as delivered.
+                    reqReceiver.Receive();
                 }
                 else if (_socket is SurveyorSocket && _socket is IReceiveSocket surveyReceiver)
                 {
@@ -104,9 +111,12 @@ public sealed class NanomsgSinkTask : SinkTask
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // A failed send must never advance the consumer offsets silently: surface the
+                // error and rethrow so the worker retries the batch or routes it to the DLQ.
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
 

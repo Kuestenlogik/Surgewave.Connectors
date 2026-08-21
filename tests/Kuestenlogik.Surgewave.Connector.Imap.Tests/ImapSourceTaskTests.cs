@@ -467,6 +467,109 @@ public class ImapSourceTaskTests
     }
 
     [Fact]
+    public void Start_ThrowsWhenFoldersListsMoreThanOneFolder()
+    {
+        using var task = new ImapSourceTask();
+        var config = new Dictionary<string, string>
+        {
+            [ImapConnectorConfig.TopicConfig] = "emails",
+            [ImapConnectorConfig.HostConfig] = "imap.example.com",
+            [ImapConnectorConfig.UsernameConfig] = "user@example.com",
+            [ImapConnectorConfig.FoldersConfig] = "INBOX,Archive"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => task.Start(config));
+        Assert.Contains(ImapConnectorConfig.FoldersConfig, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Start_AcceptsSingleEntryFoldersConfig()
+    {
+        using var task = new ImapSourceTask();
+        var config = new Dictionary<string, string>
+        {
+            [ImapConnectorConfig.TopicConfig] = "emails",
+            [ImapConnectorConfig.HostConfig] = "imap.example.com",
+            [ImapConnectorConfig.UsernameConfig] = "user@example.com",
+            [ImapConnectorConfig.FoldersConfig] = "Archive"
+        };
+
+        var exception = Record.Exception(() => task.Start(config));
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void Start_ThrowsWhenRecursiveIsEnabled()
+    {
+        using var task = new ImapSourceTask();
+        var config = new Dictionary<string, string>
+        {
+            [ImapConnectorConfig.TopicConfig] = "emails",
+            [ImapConnectorConfig.HostConfig] = "imap.example.com",
+            [ImapConnectorConfig.UsernameConfig] = "user@example.com",
+            [ImapConnectorConfig.RecursiveConfig] = "true"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => task.Start(config));
+        Assert.Contains(ImapConnectorConfig.RecursiveConfig, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Start_RestoresLastUidFromOffsetStorage()
+    {
+        using var task = new ImapSourceTask();
+        task.Initialize(new TaskContext
+        {
+            OffsetStorageReader = new StubOffsetStorageReader(new Dictionary<string, object>
+            {
+                [ImapConnectorConfig.OffsetUid] = 42u,
+                [ImapConnectorConfig.OffsetFolder] = "INBOX"
+            })
+        });
+
+        task.Start(new Dictionary<string, string>
+        {
+            [ImapConnectorConfig.TopicConfig] = "emails",
+            [ImapConnectorConfig.HostConfig] = "imap.example.com",
+            [ImapConnectorConfig.UsernameConfig] = "user@example.com"
+        });
+
+        Assert.NotNull(task.CurrentOffset);
+        Assert.Equal(42u, Assert.IsType<uint>(task.CurrentOffset![ImapConnectorConfig.OffsetUid]));
+    }
+
+    [Fact]
+    public async Task CommitAsync_WithoutConnection_DoesNotThrowForCommittedRecords()
+    {
+        using var task = new ImapSourceTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { } });
+        task.Start(new Dictionary<string, string>
+        {
+            [ImapConnectorConfig.TopicConfig] = "emails",
+            [ImapConnectorConfig.HostConfig] = "imap.example.com",
+            [ImapConnectorConfig.UsernameConfig] = "user@example.com",
+            [ImapConnectorConfig.DeleteAfterReadConfig] = "true"
+        });
+
+        var record = new SourceRecord
+        {
+            SourcePartition = new Dictionary<string, object> { ["host"] = "imap.example.com", ["folder"] = "INBOX" },
+            SourceOffset = new Dictionary<string, object>
+            {
+                [ImapConnectorConfig.OffsetUid] = 7u,
+                [ImapConnectorConfig.OffsetFolder] = "INBOX"
+            },
+            Topic = "emails",
+            Value = [1, 2, 3]
+        };
+
+        task.CommitRecord(record, new RecordMetadata { Topic = "emails", Partition = 0, Offset = 0 });
+
+        var exception = await Record.ExceptionAsync(() => task.CommitAsync(CancellationToken.None));
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void Stop_CanBeCalledMultipleTimesAfterStart()
     {
         using var task = new ImapSourceTask();
@@ -486,5 +589,24 @@ public class ImapSourceTaskTests
         });
 
         Assert.Null(exception);
+    }
+
+    private sealed class StubOffsetStorageReader(IDictionary<string, object>? storedOffset) : IOffsetStorageReader
+    {
+        public IDictionary<string, object>? Offset(IDictionary<string, object> partition) => storedOffset;
+
+        public IDictionary<IDictionary<string, object>, IDictionary<string, object>> Offsets(
+            IReadOnlyCollection<IDictionary<string, object>> partitions)
+        {
+            var result = new Dictionary<IDictionary<string, object>, IDictionary<string, object>>();
+
+            foreach (var partition in partitions)
+            {
+                if (storedOffset != null)
+                    result[partition] = storedOffset;
+            }
+
+            return result;
+        }
     }
 }

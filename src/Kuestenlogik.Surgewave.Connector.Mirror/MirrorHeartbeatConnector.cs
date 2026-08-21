@@ -19,8 +19,8 @@ public sealed class MirrorHeartbeatConnector : SourceConnector
             "Alias for the source cluster")
         .Define("target.cluster.alias", ConfigType.String, Importance.High,
             "Alias for the target cluster")
-        .Define("heartbeats.topic", ConfigType.String, "heartbeats", Importance.Medium,
-            "Topic name for heartbeat records", EditorHint.Topic)
+        .Define("heartbeats.topic", ConfigType.String, "", Importance.Medium,
+            "Topic name for heartbeat records (empty = derived from the replication policy)", EditorHint.Topic)
         .Define("heartbeats.interval.ms", ConfigType.Int, 1000L, Importance.Medium,
             "Interval between heartbeat emissions in milliseconds")
         .Define("replication.policy.class", ConfigType.String,

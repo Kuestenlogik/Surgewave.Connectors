@@ -18,6 +18,7 @@ public static class HttpServerConnectorConfig
     public const string SourceMethods = "http.source.methods";
     public const string SourceIncludeHeaders = "http.source.include.headers";
     public const string SourceIncludeQueryParams = "http.source.include.query.params";
+    public const string SourceMaxQueueSize = "http.source.max.queue.size";
 
     // Sink settings (serving topic data)
     public const string SinkTopics = "http.sink.topics";
@@ -38,6 +39,7 @@ public static class HttpServerConnectorConfig
     public const string DefaultBasePath = "/api";
     public const string DefaultSourcePath = "/ingest";
     public const string DefaultSourceMethods = "POST,PUT";
+    public const int DefaultSourceMaxQueueSize = 10000;
     public const int DefaultSinkMaxMessages = 10000;
     public const int DefaultSinkDefaultLimit = 100;
     public const string DefaultApiKeyHeader = "X-API-Key";

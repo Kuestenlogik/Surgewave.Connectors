@@ -23,7 +23,7 @@ public sealed class MattermostSourceConnector : SourceConnector
         .Define(MattermostConnectorConfig.ServerUrl, ConfigType.String, MattermostConnectorConfig.DefaultServerUrl, Importance.High, "Mattermost server URL")
         .Define(MattermostConnectorConfig.AccessToken, ConfigType.Password, "", Importance.High, "Personal access token")
         .Define(MattermostConnectorConfig.Topic, ConfigType.String, Importance.High, "Surgewave topic to write messages to", EditorHint.Topic)
-        .Define(MattermostConnectorConfig.ChannelIds, ConfigType.String, "", Importance.Medium, "Comma-separated list of channel IDs to monitor (empty for all)")
+        .Define(MattermostConnectorConfig.ChannelIds, ConfigType.String, "", Importance.Medium, "Comma-separated list of channel IDs to monitor (empty = every channel the access token's account is a member of)")
         .Define(MattermostConnectorConfig.IncludeBotMessages, ConfigType.Boolean, MattermostConnectorConfig.DefaultIncludeBotMessages, Importance.Low, "Include messages from bots")
         .Define(MattermostConnectorConfig.PollIntervalMs, ConfigType.Int, MattermostConnectorConfig.DefaultPollIntervalMs, Importance.Medium, "Poll interval in milliseconds");
 

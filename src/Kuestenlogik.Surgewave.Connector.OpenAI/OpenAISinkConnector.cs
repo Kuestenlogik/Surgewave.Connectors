@@ -35,8 +35,10 @@ public sealed class OpenAISinkConnector : SinkConnector
         .Define(OpenAIConnectorConfig.TopicsConfig, ConfigType.String, Importance.High,
             "Comma-separated list of input topics to consume", EditorHint.Topic)
         // Output
+        .Define(OpenAIConnectorConfig.OutputTopicConfig, ConfigType.String, "", Importance.Medium,
+            "Topic to produce results to (optional, requires a worker-provided producer)", EditorHint.Topic)
         .Define(OpenAIConnectorConfig.WebhookUrlConfig, ConfigType.String, "", Importance.Medium,
-            "Webhook URL to POST results (optional, logs to console if not set)")
+            "Webhook URL to POST results (optional, used when no output topic is set; logs to console if neither is set)")
         // Mode
         .Define(OpenAIConnectorConfig.ModeConfig, ConfigType.String, OpenAIConnectorConfig.ModeEmbeddings, Importance.High,
             "Processing mode: 'embeddings' or 'completions'")

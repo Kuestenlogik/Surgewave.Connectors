@@ -23,13 +23,13 @@ public sealed class WikipediaSourceConnector : SourceConnector
         .Define(WikipediaConnectorConfig.Language, ConfigType.String, WikipediaConnectorConfig.DefaultLanguage,
             Importance.High, "Wikipedia language code (en, de, fr, etc.)")
         .Define(WikipediaConnectorConfig.Mode, ConfigType.String, WikipediaConnectorConfig.DefaultMode,
-            Importance.High, "Mode: search, page, changes, random")
+            Importance.High, $"Mode: {WikipediaConnectorConfig.SupportedModes}")
         .Define(WikipediaConnectorConfig.SearchQuery, ConfigType.String, "", Importance.Medium,
             "Search query for search mode")
         .Define(WikipediaConnectorConfig.PageTitles, ConfigType.List, "", Importance.Medium,
             "Comma-separated list of page titles for page mode")
         .Define(WikipediaConnectorConfig.Categories, ConfigType.List, "", Importance.Medium,
-            "Comma-separated list of categories to watch")
+            "Comma-separated list of categories whose member pages are fetched in page mode")
         .Define(WikipediaConnectorConfig.PollIntervalMs, ConfigType.Int,
             WikipediaConnectorConfig.DefaultPollIntervalMs.ToString(), Importance.Medium,
             "Poll interval in milliseconds")
@@ -62,7 +62,10 @@ public sealed class WikipediaSourceConnector : SourceConnector
             throw new ArgumentException($"'{WikipediaConnectorConfig.Topic}' is required");
         }
 
-        var mode = config.TryGetValue(WikipediaConnectorConfig.Mode, out var m) ? m : "search";
+        var mode = config.TryGetValue(WikipediaConnectorConfig.Mode, out var m) && !string.IsNullOrWhiteSpace(m)
+            ? m : WikipediaConnectorConfig.DefaultMode;
+        WikipediaConnectorConfig.ValidateMode(mode);
+
         if (mode == "search")
         {
             if (!config.TryGetValue(WikipediaConnectorConfig.SearchQuery, out var query) ||
@@ -73,10 +76,15 @@ public sealed class WikipediaSourceConnector : SourceConnector
         }
         else if (mode == "page")
         {
-            if (!config.TryGetValue(WikipediaConnectorConfig.PageTitles, out var titles) ||
-                string.IsNullOrWhiteSpace(titles))
+            var hasTitles = config.TryGetValue(WikipediaConnectorConfig.PageTitles, out var titles) &&
+                            !string.IsNullOrWhiteSpace(titles);
+            var hasCategories = config.TryGetValue(WikipediaConnectorConfig.Categories, out var categories) &&
+                                !string.IsNullOrWhiteSpace(categories);
+
+            if (!hasTitles && !hasCategories)
             {
-                throw new ArgumentException($"'{WikipediaConnectorConfig.PageTitles}' is required for page mode");
+                throw new ArgumentException(
+                    $"'{WikipediaConnectorConfig.PageTitles}' or '{WikipediaConnectorConfig.Categories}' is required for page mode");
             }
         }
     }

@@ -40,6 +40,8 @@ public sealed class HttpServerSourceConnector : SourceConnector
             "Include request headers in the message")
         .Define(HttpServerConnectorConfig.SourceIncludeQueryParams, ConfigType.Boolean, true, Importance.Low,
             "Include query parameters in the message")
+        .Define(HttpServerConnectorConfig.SourceMaxQueueSize, ConfigType.Int, HttpServerConnectorConfig.DefaultSourceMaxQueueSize, Importance.Low,
+            "Maximum number of accepted requests held in memory until the next poll; further requests are rejected with 503")
 
         // CORS
         .Define(HttpServerConnectorConfig.EnableCors, ConfigType.Boolean, false, Importance.Low,

@@ -23,8 +23,8 @@ public sealed class MirrorCheckpointConnector : SourceConnector
             "Bootstrap servers for source cluster")
         .Define("target.bootstrap.servers", ConfigType.String, Importance.High,
             "Bootstrap servers for target cluster")
-        .Define("checkpoints.topic", ConfigType.String, "checkpoints.internal", Importance.Medium,
-            "Topic name for checkpoint records", EditorHint.Topic)
+        .Define("checkpoints.topic", ConfigType.String, "", Importance.Medium,
+            "Topic name for checkpoint records (empty = derived from the replication policy)", EditorHint.Topic)
         .Define("checkpoints.interval.ms", ConfigType.Int, 60000L, Importance.Medium,
             "Interval between checkpoint emissions in milliseconds")
         .Define("groups", ConfigType.String, ".*", Importance.Medium,

@@ -21,11 +21,13 @@ public sealed class HueSourceTask : SourceTask
     private bool _includeLights;
     private bool _includeSensors;
     private bool _includeGroups;
+    private bool _includeScenes;
     private bool _eventsOnly;
     private DateTime _lastPoll = DateTime.MinValue;
     private Dictionary<string, string> _lastLightStates = new();
     private Dictionary<string, string> _lastSensorStates = new();
     private Dictionary<string, string> _lastGroupStates = new();
+    private Dictionary<string, string> _lastSceneStates = new();
     private long _messageId;
 
     public override string Version => "1.0.0";
@@ -40,6 +42,7 @@ public sealed class HueSourceTask : SourceTask
         _includeLights = (config.TryGetValue(HueConnectorConfig.IncludeLights, out var includeLights) ? includeLights : "true") == "true";
         _includeSensors = (config.TryGetValue(HueConnectorConfig.IncludeSensors, out var includeSensors) ? includeSensors : "true") == "true";
         _includeGroups = (config.TryGetValue(HueConnectorConfig.IncludeGroups, out var includeGroups) ? includeGroups : "true") == "true";
+        _includeScenes = (config.TryGetValue(HueConnectorConfig.IncludeScenes, out var includeScenes) ? includeScenes : "false") == "true";
         _eventsOnly = (config.TryGetValue(HueConnectorConfig.EventsOnly, out var eventsOnly) ? eventsOnly : "true") == "true";
 
         _client = new LocalHueClient(bridgeIp);
@@ -114,10 +117,36 @@ public sealed class HueSourceTask : SourceTask
                     }
                 }
             }
+
+            if (_includeScenes)
+            {
+                var scenes = await _client!.GetScenesAsync();
+                foreach (var scene in scenes)
+                {
+                    var state = JsonSerializer.Serialize(new
+                    {
+                        name = scene.Name,
+                        lights = scene.Lights,
+                        lastUpdated = scene.LastUpdated
+                    });
+
+                    if (!_eventsOnly || !_lastSceneStates.TryGetValue(scene.Id, out var lastState) || lastState != state)
+                    {
+                        records.Add(CreateSceneRecord(scene));
+                        _lastSceneStates[scene.Id] = state;
+                    }
+                }
+            }
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // Log and continue
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Bridge connectivity/auth failures must stay visible - the records collected
+            // before the failure are still returned so partial progress is not lost.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -234,6 +263,42 @@ public sealed class HueSourceTask : SourceTask
                 ["hue.type"] = Encoding.UTF8.GetBytes("group"),
                 ["hue.id"] = Encoding.UTF8.GetBytes(group.Id),
                 ["hue.name"] = Encoding.UTF8.GetBytes(group.Name)
+            }
+        };
+    }
+
+    private SourceRecord CreateSceneRecord(Scene scene)
+    {
+        var payload = new
+        {
+            type = "scene",
+            id = scene.Id,
+            name = scene.Name,
+            sceneType = scene.Type?.ToString(),
+            group = scene.Group,
+            lights = scene.Lights,
+            owner = scene.Owner,
+            recycle = scene.Recycle,
+            locked = scene.Locked,
+            lastUpdated = scene.LastUpdated
+        };
+
+        return new SourceRecord
+        {
+            SourcePartition = new Dictionary<string, object> { ["source"] = "hue", ["type"] = "scene" },
+            SourceOffset = new Dictionary<string, object>
+            {
+                ["message_id"] = Interlocked.Increment(ref _messageId),
+                ["scene_id"] = scene.Id
+            },
+            Topic = _topic,
+            Key = Encoding.UTF8.GetBytes($"scene:{scene.Id}"),
+            Value = JsonSerializer.SerializeToUtf8Bytes(payload),
+            Headers = new Dictionary<string, byte[]>
+            {
+                ["hue.type"] = Encoding.UTF8.GetBytes("scene"),
+                ["hue.id"] = Encoding.UTF8.GetBytes(scene.Id),
+                ["hue.name"] = Encoding.UTF8.GetBytes(scene.Name ?? "")
             }
         };
     }

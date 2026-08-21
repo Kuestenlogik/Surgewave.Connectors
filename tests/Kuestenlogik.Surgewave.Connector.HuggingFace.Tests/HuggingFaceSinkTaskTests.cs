@@ -1,5 +1,8 @@
 namespace Kuestenlogik.Surgewave.Connector.HuggingFace.Tests;
 
+using System.Collections.Concurrent;
+using System.Net;
+using System.Text;
 using Kuestenlogik.Surgewave.Connect;
 using Xunit;
 
@@ -151,6 +154,183 @@ public sealed class HuggingFaceSinkTaskTests
     {
         Assert.Equal("wait.for.model", HuggingFaceConnectorConfig.WaitForModelConfig);
         Assert.True(HuggingFaceConnectorConfig.DefaultWaitForModel);
+    }
+
+    [Fact]
+    public async Task HuggingFaceSinkTask_FlushAsync_DrainsBufferedRecordsToWebhook()
+    {
+        var port = 26200 + (Environment.ProcessId % 200);
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Start();
+
+        var webhookHits = 0;
+        var serverTask = Task.Run(() => RunMockServerAsync(listener, webhookStatusCode: 200, onWebhookHit: () => Interlocked.Increment(ref webhookHits)));
+
+        using var task = new HuggingFaceSinkTask();
+        task.Initialize(CreateTaskContext());
+        task.Start(CreateMockServerConfig(port));
+
+        try
+        {
+            // Below batch size: PutAsync only buffers, nothing is inferred yet
+            await task.PutAsync([CreateRecord()]);
+            Assert.Equal(0, Volatile.Read(ref webhookHits));
+
+            // FlushAsync must drain the buffer - the worker commits consumer offsets
+            // right after it, so anything left in the buffer would be lost on restart
+            await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+            Assert.Equal(1, Volatile.Read(ref webhookHits));
+        }
+        finally
+        {
+            task.Stop();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    [Fact]
+    public async Task HuggingFaceSinkTask_FlushAsync_ThrowsWhenWebhookDeliveryFails()
+    {
+        var port = 26400 + (Environment.ProcessId % 200);
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Start();
+
+        var serverTask = Task.Run(() => RunMockServerAsync(listener, webhookStatusCode: 500, onWebhookHit: () => { }));
+
+        using var task = new HuggingFaceSinkTask();
+        task.Initialize(CreateTaskContext());
+        task.Start(CreateMockServerConfig(port));
+
+        try
+        {
+            await task.PutAsync([CreateRecord()]);
+
+            // A failing webhook means the result was NOT delivered - the flush must
+            // throw so the worker retries/DLQs instead of committing the offset
+            await Assert.ThrowsAsync<HttpRequestException>(
+                () => task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None));
+        }
+        finally
+        {
+            task.Stop();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    [Fact]
+    public async Task HuggingFaceSinkTask_TranslationMode_SendsConfiguredLanguagePair()
+    {
+        var port = 26600 + (Environment.ProcessId % 200);
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://localhost:{port}/");
+        listener.Start();
+
+        var inferenceBodies = new ConcurrentQueue<string>();
+        var serverTask = Task.Run(() => RunMockServerAsync(listener, webhookStatusCode: 200, onWebhookHit: () => { }, inferenceBodies));
+
+        var config = CreateMockServerConfig(port);
+        config[HuggingFaceConnectorConfig.ModeConfig] = HuggingFaceConnectorConfig.ModeTranslation;
+        config[HuggingFaceConnectorConfig.SourceLanguageConfig] = "eng_Latn";
+        config[HuggingFaceConnectorConfig.TargetLanguageConfig] = "deu_Latn";
+
+        using var task = new HuggingFaceSinkTask();
+        task.Initialize(CreateTaskContext());
+        task.Start(config);
+
+        try
+        {
+            await task.PutAsync([CreateRecord()]);
+            await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+            Assert.True(inferenceBodies.TryDequeue(out var body));
+            Assert.Contains("\"src_lang\":\"eng_Latn\"", body, StringComparison.Ordinal);
+            Assert.Contains("\"tgt_lang\":\"deu_Latn\"", body, StringComparison.Ordinal);
+        }
+        finally
+        {
+            task.Stop();
+            listener.Stop();
+            await serverTask;
+        }
+    }
+
+    private static Dictionary<string, string> CreateMockServerConfig(int port)
+    {
+        return new Dictionary<string, string>
+        {
+            [HuggingFaceConnectorConfig.TopicsConfig] = "test-topic",
+            [HuggingFaceConnectorConfig.ApiKeyConfig] = "test-api-key",
+            [HuggingFaceConnectorConfig.ModelIdConfig] = "test-model",
+            [HuggingFaceConnectorConfig.EndpointConfig] = $"http://localhost:{port}/models",
+            [HuggingFaceConnectorConfig.WebhookUrlConfig] = $"http://localhost:{port}/webhook",
+            [HuggingFaceConnectorConfig.BatchSizeConfig] = "100",
+            [HuggingFaceConnectorConfig.BatchTimeoutMsConfig] = "600000",
+            [HuggingFaceConnectorConfig.RetryMaxConfig] = "0",
+            [HuggingFaceConnectorConfig.RetryBackoffMsConfig] = "1",
+            [HuggingFaceConnectorConfig.WaitForModelConfig] = "false"
+        };
+    }
+
+    private static SinkRecord CreateRecord()
+    {
+        return new SinkRecord
+        {
+            Topic = "test-topic",
+            Partition = 0,
+            Offset = 0,
+            Value = Encoding.UTF8.GetBytes("{\"text\":\"hello\"}"),
+            Timestamp = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static async Task RunMockServerAsync(
+        HttpListener listener,
+        int webhookStatusCode,
+        Action onWebhookHit,
+        ConcurrentQueue<string>? inferenceBodies = null)
+    {
+        const string inferenceJson = """[{ "label": "POSITIVE", "score": 0.99 }]""";
+
+        try
+        {
+            while (listener.IsListening)
+            {
+                var ctx = await listener.GetContextAsync();
+
+                if (ctx.Request.Url!.AbsolutePath.EndsWith("/webhook", StringComparison.Ordinal))
+                {
+                    onWebhookHit();
+                    ctx.Response.StatusCode = webhookStatusCode;
+                }
+                else
+                {
+                    if (inferenceBodies != null)
+                    {
+                        using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
+                        inferenceBodies.Enqueue(await reader.ReadToEndAsync());
+                    }
+
+                    var body = Encoding.UTF8.GetBytes(inferenceJson);
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.StatusCode = 200;
+                    await ctx.Response.OutputStream.WriteAsync(body);
+                }
+
+                ctx.Response.Close();
+            }
+        }
+        catch (HttpListenerException)
+        {
+            // Listener stopped
+        }
+        catch (ObjectDisposedException)
+        {
+            // Listener disposed
+        }
     }
 
     private static TaskContext CreateTaskContext()

@@ -356,4 +356,51 @@ public class Neo4jSinkTaskTests
         var exception = await Record.ExceptionAsync(() => task.PutAsync(records, CancellationToken.None));
         Assert.Null(exception);
     }
+
+    [Fact]
+    public async Task PutAsync_InvalidJson_RaisesErrorInsteadOfDroppingSilently()
+    {
+        var errors = new List<Exception>();
+        using var task = new Neo4jSinkTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+        task.Start(new Dictionary<string, string>
+        {
+            [Neo4jConnectorConfig.UriConfig] = "bolt://127.0.0.1:1",
+            [Neo4jConnectorConfig.LabelConfig] = "Person"
+        });
+
+        var records = new List<SinkRecord>
+        {
+            new() { Topic = "people", Partition = 3, Offset = 42, Value = System.Text.Encoding.UTF8.GetBytes("not valid json") }
+        };
+
+        await task.PutAsync(records, CancellationToken.None);
+
+        Assert.Single(errors);
+        Assert.Contains("42", errors[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FlushAsync_WithoutResolvableLabel_RaisesErrorInsteadOfWritingInvalidCypher()
+    {
+        var errors = new List<Exception>();
+        using var task = new Neo4jSinkTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+        task.Start(new Dictionary<string, string>
+        {
+            // Neither a static label nor a label field: the records cannot be written.
+            [Neo4jConnectorConfig.UriConfig] = "bolt://127.0.0.1:1"
+        });
+
+        var records = new List<SinkRecord>
+        {
+            new() { Topic = "people", Partition = 0, Offset = 0, Value = System.Text.Encoding.UTF8.GetBytes("{\"name\":\"Alice\"}") }
+        };
+
+        await task.PutAsync(records, CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        Assert.Single(errors);
+        Assert.Contains(Neo4jConnectorConfig.NodeLabelFieldConfig, errors[0].Message, StringComparison.Ordinal);
+    }
 }

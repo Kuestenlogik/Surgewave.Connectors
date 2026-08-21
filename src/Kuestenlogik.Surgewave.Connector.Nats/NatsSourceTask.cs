@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using NATS.Client.Core;
 using NATS.Client.JetStream;
@@ -15,7 +14,6 @@ public sealed class NatsSourceTask : SourceTask
     public override string Version => "1.0.0";
 
     private string _topic = "";
-    private string _natsUrl = NatsConnectorConfig.DefaultUrl;
     private string _streamName = "";
     private string _consumerName = "";
     private bool _durable = NatsConnectorConfig.DefaultConsumerDurable;
@@ -24,25 +22,19 @@ public sealed class NatsSourceTask : SourceTask
     private int _maxAckPending = NatsConnectorConfig.DefaultMaxAckPending;
     private int _fetchBatchSize = NatsConnectorConfig.DefaultFetchBatchSize;
     private int _fetchTimeoutMs = NatsConnectorConfig.DefaultFetchTimeoutMs;
-    private string? _credentialsFile;
-    private string? _token;
-    private string? _username;
-    private string? _password;
 
     private NatsConnection? _connection;
     private NatsJSContext? _jetStream;
     private INatsJSConsumer? _consumer;
-    private readonly ConcurrentQueue<PendingMessage> _pendingAcks = new();
+    private readonly PendingAckQueue _pendingAcks = new();
 
     public override void Start(IDictionary<string, string> config)
     {
         _topic = config[NatsConnectorConfig.Topic];
-        
-        if (config.TryGetValue(NatsConnectorConfig.Url, out var url))
-            _natsUrl = url;
+
         _streamName = config[NatsConnectorConfig.StreamName];
         _consumerName = config[NatsConnectorConfig.ConsumerName];
-        
+
         if (config.TryGetValue(NatsConnectorConfig.ConsumerDurable, out var durable))
             _durable = bool.Parse(durable);
         if (config.TryGetValue(NatsConnectorConfig.DeliverPolicy, out var deliverPolicy))
@@ -55,38 +47,12 @@ public sealed class NatsSourceTask : SourceTask
             _fetchBatchSize = int.Parse(fetchBatchSize);
         if (config.TryGetValue(NatsConnectorConfig.FetchTimeoutMs, out var fetchTimeout))
             _fetchTimeoutMs = int.Parse(fetchTimeout);
-        if (config.TryGetValue(NatsConnectorConfig.CredentialsFile, out var creds))
-            _credentialsFile = creds;
-        if (config.TryGetValue(NatsConnectorConfig.Token, out var token))
-            _token = token;
-        if (config.TryGetValue(NatsConnectorConfig.Username, out var username))
-            _username = username;
-        if (config.TryGetValue(NatsConnectorConfig.Password, out var password))
-            _password = password;
 
-        ConnectAsync().GetAwaiter().GetResult();
+        ConnectAsync(NatsOptionsBuilder.Build(config)).GetAwaiter().GetResult();
     }
 
-    private async Task ConnectAsync()
+    private async Task ConnectAsync(NatsOpts opts)
     {
-        var opts = new NatsOpts
-        {
-            Url = _natsUrl
-        };
-
-        if (!string.IsNullOrEmpty(_credentialsFile))
-        {
-            opts = opts with { AuthOpts = NatsAuthOpts.Default with { CredsFile = _credentialsFile } };
-        }
-        else if (!string.IsNullOrEmpty(_token))
-        {
-            opts = opts with { AuthOpts = NatsAuthOpts.Default with { Token = _token } };
-        }
-        else if (!string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_password))
-        {
-            opts = opts with { AuthOpts = NatsAuthOpts.Default with { Username = _username, Password = _password } };
-        }
-
         _connection = new NatsConnection(opts);
         await _connection.ConnectAsync();
 
@@ -125,11 +91,9 @@ public sealed class NatsSourceTask : SourceTask
 
     public override void Stop()
     {
-        // Ack any remaining pending messages
-        while (_pendingAcks.TryDequeue(out var pending))
-        {
-            try { pending.AckAsync().AsTask().GetAwaiter().GetResult(); } catch { /* ignore */ }
-        }
+        // Messages still pending were never committed by the worker. Acking them here would
+        // drop them for good, so NAK instead and let JetStream redeliver them.
+        _pendingAcks.NakAllAsync().GetAwaiter().GetResult();
     }
 
     protected override void Dispose(bool disposing)
@@ -191,15 +155,12 @@ public sealed class NatsSourceTask : SourceTask
         return records;
     }
 
-    public override async Task CommitAsync(CancellationToken cancellationToken)
+    public override Task CommitAsync(CancellationToken cancellationToken)
     {
-        while (_pendingAcks.TryDequeue(out var pending))
-        {
-            await pending.AckAsync(cancellationToken);
-        }
+        return _pendingAcks.AckAllAsync(cancellationToken);
     }
 
-    private sealed class PendingMessage
+    private sealed class PendingMessage : IPendingAck
     {
         private readonly INatsJSMsg<byte[]> _msg;
 
@@ -208,9 +169,14 @@ public sealed class NatsSourceTask : SourceTask
             _msg = msg;
         }
 
-        public ValueTask AckAsync(CancellationToken ct = default)
+        public ValueTask AckAsync(CancellationToken cancellationToken = default)
         {
-            return _msg.AckAsync(cancellationToken: ct);
+            return _msg.AckAsync(cancellationToken: cancellationToken);
+        }
+
+        public ValueTask NakAsync(CancellationToken cancellationToken = default)
+        {
+            return _msg.NakAsync(cancellationToken: cancellationToken);
         }
     }
 }

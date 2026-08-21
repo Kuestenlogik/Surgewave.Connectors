@@ -1,4 +1,4 @@
-using System.Net.Http.Headers;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
@@ -22,7 +22,12 @@ public sealed class FacebookSinkTask : SinkTask
     private string _accessToken = string.Empty;
     private string _messageField = "message";
     private string? _linkField;
-    private string _postType = "feed";
+    private string _postType = PostTypeFeed;
+    private string _imageUrlField = "image_url";
+
+    private const string PostTypeFeed = "feed";
+    private const string PostTypePhoto = "photo";
+    private const string PostTypeVideo = "video";
 
     public override string Version => "1.0.0";
 
@@ -36,7 +41,15 @@ public sealed class FacebookSinkTask : SinkTask
 
         _messageField = config.TryGetValue(FacebookConnectorConfig.MessageField, out var mf) ? mf : "message";
         _linkField = config.TryGetValue(FacebookConnectorConfig.LinkField, out var lf) ? lf : null;
-        _postType = config.TryGetValue(FacebookConnectorConfig.PostType, out var pt) ? pt : "feed";
+        _postType = config.TryGetValue(FacebookConnectorConfig.PostType, out var pt) ? pt : PostTypeFeed;
+        _imageUrlField = config.TryGetValue(FacebookConnectorConfig.ImageUrlField, out var iuf) ? iuf : "image_url";
+
+        if (_postType is not (PostTypeFeed or PostTypePhoto or PostTypeVideo))
+        {
+            throw new ArgumentException(
+                $"Unsupported '{FacebookConnectorConfig.PostType}' value '{_postType}'. Supported: {PostTypeFeed}, {PostTypePhoto}, {PostTypeVideo}.",
+                nameof(config));
+        }
 
         _httpClient = new HttpClient
         {
@@ -52,21 +65,67 @@ public sealed class FacebookSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
+            var json = Encoding.UTF8.GetString(record.Value);
+
+            Dictionary<string, JsonElement>? data;
             try
             {
-                var json = Encoding.UTF8.GetString(record.Value);
-                var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (data == null) continue;
+                data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                // Poison record: skip it, but keep it visible instead of acking silently
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    Describe(record, "is not a JSON object"), ex));
+                continue;
+            }
 
-                var message = data.TryGetValue(_messageField, out var msgEl) ? msgEl.GetString() : json;
+            if (data == null) continue;
 
-                var formData = new Dictionary<string, string>
+            var message = data.TryGetValue(_messageField, out var msgEl)
+                ? (msgEl.ValueKind == JsonValueKind.String ? msgEl.GetString() : msgEl.ToString())
+                : json;
+
+            var formData = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["access_token"] = _accessToken
+            };
+
+            string endpoint;
+            if (_postType is PostTypePhoto or PostTypeVideo)
+            {
+                // The Graph API rejects a /photos or /videos post without a media source,
+                // so a record without one is a poison record, not a deliverable post.
+                var mediaUrl = data.TryGetValue(_imageUrlField, out var mediaEl) && mediaEl.ValueKind == JsonValueKind.String
+                    ? mediaEl.GetString()
+                    : null;
+                if (string.IsNullOrEmpty(mediaUrl))
                 {
-                    ["access_token"] = _accessToken,
-                    ["message"] = message ?? ""
-                };
+                    Context?.RaiseError?.Invoke(new InvalidOperationException(
+                        Describe(record, $"has no '{_imageUrlField}' media URL required for a '{_postType}' post")));
+                    continue;
+                }
 
-                if (!string.IsNullOrEmpty(_linkField) && data.TryGetValue(_linkField, out var linkEl))
+                if (_postType == PostTypePhoto)
+                {
+                    endpoint = $"{_pageId}/photos";
+                    formData["url"] = mediaUrl;
+                    formData["caption"] = message ?? string.Empty;
+                }
+                else
+                {
+                    endpoint = $"{_pageId}/videos";
+                    formData["file_url"] = mediaUrl;
+                    formData["description"] = message ?? string.Empty;
+                }
+            }
+            else
+            {
+                endpoint = $"{_pageId}/feed";
+                formData["message"] = message ?? string.Empty;
+
+                if (!string.IsNullOrEmpty(_linkField) && data.TryGetValue(_linkField, out var linkEl)
+                    && linkEl.ValueKind == JsonValueKind.String)
                 {
                     var link = linkEl.GetString();
                     if (!string.IsNullOrEmpty(link))
@@ -74,22 +133,27 @@ public sealed class FacebookSinkTask : SinkTask
                         formData["link"] = link;
                     }
                 }
-
-                using var content = new FormUrlEncodedContent(formData);
-                var endpoint = _postType switch
-                {
-                    "photo" => $"{_pageId}/photos",
-                    "video" => $"{_pageId}/videos",
-                    _ => $"{_pageId}/feed"
-                };
-
-                using var response = await _httpClient.PostAsync(new Uri(endpoint, UriKind.Relative), content, cancellationToken);
             }
-            catch (Exception)
+
+            using var content = new FormUrlEncodedContent(formData);
+            using var response = await _httpClient.PostAsync(new Uri(endpoint, UriKind.Relative), content, cancellationToken);
+
+            // A rejected post (bad token, rate limit, API error) must fail the batch so the
+            // worker can retry or DLQ it - the records are acked once PutAsync returns.
+            if (!response.IsSuccessStatusCode)
             {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var error = new HttpRequestException(string.Create(CultureInfo.InvariantCulture,
+                    $"Facebook Graph API rejected the post to /{endpoint} with status {(int)response.StatusCode} {response.ReasonPhrase}: {body}"));
+                Context?.RaiseError?.Invoke(error);
+                throw error;
             }
         }
     }
+
+    private static string Describe(SinkRecord record, string problem) => string.Create(
+        CultureInfo.InvariantCulture,
+        $"Facebook sink skipped record {record.Topic}-{record.Partition}@{record.Offset}: it {problem}");
 
     public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
     {

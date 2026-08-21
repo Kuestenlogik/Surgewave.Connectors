@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Cassandra;
@@ -30,8 +31,15 @@ public sealed class CassandraSourceTask : SourceTask
     private string[] _clusteringKeyColumns = [];
 
     private DateTimeOffset? _lastTimestamp;
+    private byte[]? _pagingState;
     private DateTime _lastPollTime = DateTime.MinValue;
     private IDictionary<string, object> _sourcePartition = new Dictionary<string, object>();
+
+    /// <summary>
+    /// Without a timestamp column the query is identical on every poll, so the driver's
+    /// paging state is the only cursor that moves the scan past the first page.
+    /// </summary>
+    private bool UsesPaging => string.IsNullOrEmpty(_timestampColumn);
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -56,7 +64,40 @@ public sealed class CassandraSourceTask : SourceTask
             [CassandraConnectorConfig.OffsetTable] = _table
         };
 
+        // Resume where the previous task instance stopped instead of re-ingesting the table.
+        RestoreOffsets();
+
         (_cluster, _session) = CreateSession(config);
+    }
+
+    private void RestoreOffsets()
+    {
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+        if (storedOffset == null)
+            return;
+
+        if (storedOffset.TryGetValue(CassandraConnectorConfig.OffsetTimestamp, out var ts) && ts != null &&
+            DateTimeOffset.TryParse(ts.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var timestamp))
+        {
+            _lastTimestamp = timestamp;
+        }
+
+        if (storedOffset.TryGetValue(CassandraConnectorConfig.OffsetPagingState, out var paging) &&
+            paging?.ToString() is { Length: > 0 } pagingState)
+        {
+            try
+            {
+                // The record carries the state that produced its page, so the scan resumes
+                // at that page (rows may repeat, but none are skipped).
+                _pagingState = Convert.FromBase64String(pagingState);
+            }
+            catch (FormatException ex)
+            {
+                // Corrupt cursor: restart the scan rather than failing the task silently.
+                _pagingState = null;
+                Context?.RaiseError?.Invoke(ex);
+            }
+        }
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
@@ -155,12 +196,20 @@ public sealed class CassandraSourceTask : SourceTask
             var cql = BuildQuery();
             var statement = new SimpleStatement(cql);
             statement.SetPageSize(_maxRowsPerPoll);
+            statement.SetAutoPage(false);
+
+            // Paging state of the page this poll reads (null = first page).
+            var pageState = UsesPaging ? _pagingState : null;
+            if (pageState != null)
+            {
+                statement.SetPagingState(pageState);
+            }
 
             var resultSet = await _session.ExecuteAsync(statement);
 
             foreach (var row in resultSet)
             {
-                var record = CreateSourceRecord(row, resultSet.Columns);
+                var record = CreateSourceRecord(row, resultSet.Columns, pageState);
                 records.Add(record);
 
                 // Track timestamp for incremental polling
@@ -178,10 +227,17 @@ public sealed class CassandraSourceTask : SourceTask
                 if (records.Count >= _maxRowsPerPoll)
                     break;
             }
+
+            if (UsesPaging)
+            {
+                // Null once the last page was read - the next poll rescans from the start.
+                _pagingState = resultSet.PagingState;
+            }
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Cassandra poll error: {ex.Message}");
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -196,25 +252,28 @@ public sealed class CassandraSourceTask : SourceTask
             // Add timestamp filter if configured and supported
             if (!string.IsNullOrEmpty(_timestampColumn) && _lastTimestamp.HasValue)
             {
+                var literal = FormatTimestampLiteral(_lastTimestamp.Value);
+
                 // Note: Cassandra requires filtering on primary key columns for efficient queries
                 // This is a best-effort approach; users should configure partition keys appropriately
                 if (query.Contains(" WHERE ", StringComparison.OrdinalIgnoreCase))
                 {
                     query = query.Replace(" ALLOW FILTERING", "", StringComparison.OrdinalIgnoreCase);
-                    query += $" AND {_timestampColumn} > '{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.fff}+0000' ALLOW FILTERING";
+                    query += $" AND {_timestampColumn} > '{literal}' ALLOW FILTERING";
                 }
                 else if (query.Contains(" ORDER BY ", StringComparison.OrdinalIgnoreCase))
                 {
-                    query = query.Replace(" ORDER BY ", $" WHERE {_timestampColumn} > '{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.fff}+0000' ORDER BY ", StringComparison.OrdinalIgnoreCase);
+                    query = query.Replace(" ORDER BY ", $" WHERE {_timestampColumn} > '{literal}' ORDER BY ", StringComparison.OrdinalIgnoreCase);
                     query += " ALLOW FILTERING";
                 }
                 else
                 {
-                    query += $" WHERE {_timestampColumn} > '{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.fff}+0000' ALLOW FILTERING";
+                    query += $" WHERE {_timestampColumn} > '{literal}' ALLOW FILTERING";
                 }
             }
 
-            return query + $" LIMIT {_maxRowsPerPoll}";
+            // With paging the page size bounds the poll; a LIMIT would cap the whole scan.
+            return UsesPaging ? query : query + $" LIMIT {_maxRowsPerPoll}";
         }
         else
         {
@@ -224,17 +283,26 @@ public sealed class CassandraSourceTask : SourceTask
 
             if (!string.IsNullOrEmpty(_timestampColumn) && _lastTimestamp.HasValue)
             {
-                sb.Append($" WHERE {_timestampColumn} > '{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.fff}+0000'");
+                sb.Append($" WHERE {_timestampColumn} > '{FormatTimestampLiteral(_lastTimestamp.Value)}'");
                 sb.Append(" ALLOW FILTERING");
             }
 
-            sb.Append($" LIMIT {_maxRowsPerPoll}");
+            if (!UsesPaging)
+            {
+                sb.Append($" LIMIT {_maxRowsPerPoll}");
+            }
 
             return sb.ToString();
         }
     }
 
-    private SourceRecord CreateSourceRecord(Row row, CqlColumn[] columns)
+    /// <summary>
+    /// Renders a CQL timestamp literal in UTC; the format must not follow the host culture.
+    /// </summary>
+    private static string FormatTimestampLiteral(DateTimeOffset value)
+        => value.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) + "+0000";
+
+    private SourceRecord CreateSourceRecord(Row row, CqlColumn[] columns, byte[]? pageState)
     {
         var rowDict = new Dictionary<string, object?>();
         for (var i = 0; i < columns.Length; i++)
@@ -251,7 +319,14 @@ public sealed class CassandraSourceTask : SourceTask
         var sourceOffset = new Dictionary<string, object>();
         if (!string.IsNullOrEmpty(_timestampColumn) && rowDict.TryGetValue(_timestampColumn, out var ts) && ts != null)
         {
-            sourceOffset[CassandraConnectorConfig.OffsetTimestamp] = ts.ToString()!;
+            sourceOffset[CassandraConnectorConfig.OffsetTimestamp] = FormatOffsetValue(ts);
+        }
+        else if (UsesPaging)
+        {
+            // Cursor of this row: the paging state its page was fetched with.
+            sourceOffset[CassandraConnectorConfig.OffsetPagingState] = pageState == null
+                ? ""
+                : Convert.ToBase64String(pageState);
         }
 
         // Add partition key to offset
@@ -274,6 +349,17 @@ public sealed class CassandraSourceTask : SourceTask
             Headers = headers
         };
     }
+
+    /// <summary>
+    /// Renders an offset cursor value round-trippably so a restart can parse it back.
+    /// </summary>
+    private static string FormatOffsetValue(object value) => value switch
+    {
+        DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
+        DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
+        IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+        _ => value.ToString() ?? ""
+    };
 
     private static object? ConvertCassandraValue(object? value)
     {

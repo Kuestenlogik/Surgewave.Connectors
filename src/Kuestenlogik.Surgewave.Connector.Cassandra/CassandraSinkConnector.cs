@@ -25,7 +25,7 @@ public sealed class CassandraSinkConnector : SinkConnector
         .Define(CassandraConnectorConfig.ConsistencyLevelConfig, ConfigType.String, CassandraConnectorConfig.DefaultConsistencyLevel, Importance.Low, "Write consistency level")
         .Define(CassandraConnectorConfig.SslEnabledConfig, ConfigType.Boolean, false, Importance.Low, "Enable SSL/TLS connection")
         .Define(CassandraConnectorConfig.TopicsConfig, ConfigType.String, Importance.High, "Comma-separated list of topics to consume", EditorHint.Topic)
-        .Define(CassandraConnectorConfig.WriteModeConfig, ConfigType.String, CassandraConnectorConfig.DefaultWriteMode, Importance.Medium, "Write mode: insert, upsert", EditorHint.Select, options: ["insert", "upsert"])
+        .Define(CassandraConnectorConfig.WriteModeConfig, ConfigType.String, CassandraConnectorConfig.DefaultWriteMode, Importance.Medium, "Write mode: insert (INSERT the record) or upsert (UPDATE the row addressed by the configured key columns)", EditorHint.Select, options: ["insert", "upsert"])
         .Define(CassandraConnectorConfig.BatchSizeConfig, ConfigType.Int, CassandraConnectorConfig.DefaultBatchSize, Importance.Low, "Batch size for writes")
         .Define(CassandraConnectorConfig.MaxRetryCountConfig, ConfigType.Int, CassandraConnectorConfig.DefaultMaxRetryCount, Importance.Low, "Maximum retry attempts")
         .Define(CassandraConnectorConfig.RetryDelayMsConfig, ConfigType.Int, (int)CassandraConnectorConfig.DefaultRetryDelayMs, Importance.Low, "Delay between retries in milliseconds")

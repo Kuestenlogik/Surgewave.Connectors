@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -12,6 +13,9 @@ namespace Kuestenlogik.Surgewave.Connector.Surgewave.Bridge;
 /// </summary>
 public sealed class SurgewaveBridgeSourceTask : SourceTask
 {
+    /// <summary>Key under which a record's replication cursor lives in <see cref="SourceRecord.SourceOffset"/>.</summary>
+    private const string OffsetKey = "offset";
+
     private SurgewaveNativeClient? _sourceClient;
     private string _sourceBootstrapServers = null!;
     private string _sourceClusterAlias = null!;
@@ -28,8 +32,12 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
     private bool _heartbeatEnabled;
     private int _heartbeatIntervalMs;
     private DateTime _lastHeartbeat = DateTime.MinValue;
+    private bool _offsetTrackingEnabled;
+    private int _offsetSyncIntervalMs;
+    private DateTime _lastOffsetSync = DateTime.MinValue;
 
     private readonly ConcurrentDictionary<(string topic, int partition), long> _currentOffsets = new();
+    private readonly ConcurrentDictionary<(string topic, int partition), long> _committedOffsets = new();
     private readonly ConcurrentQueue<SourceRecord> _pendingRecords = new();
     private long _messageId;
     private bool _initialized;
@@ -66,12 +74,15 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         _preservePartitions = (config.TryGetValue(SurgewaveBridgeConnectorConfig.PreservePartitions, out var preservePartitions) ? preservePartitions : "true") == "true";
         _startFromLatest = (config.TryGetValue(SurgewaveBridgeConnectorConfig.StartFromLatest, out var startFromLatest) ? startFromLatest : "false") == "true";
         _batchSize = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.BatchSize, out var batchSize)
-            ? batchSize : SurgewaveBridgeConnectorConfig.DefaultBatchSize.ToString());
+            ? batchSize : SurgewaveBridgeConnectorConfig.DefaultBatchSize.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
         _pollTimeoutMs = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.PollTimeoutMs, out var pollTimeoutMs)
-            ? pollTimeoutMs : SurgewaveBridgeConnectorConfig.DefaultPollTimeoutMs.ToString());
+            ? pollTimeoutMs : SurgewaveBridgeConnectorConfig.DefaultPollTimeoutMs.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
         _heartbeatEnabled = (config.TryGetValue(SurgewaveBridgeConnectorConfig.HeartbeatEnabled, out var heartbeatEnabled) ? heartbeatEnabled : "true") == "true";
         _heartbeatIntervalMs = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.HeartbeatIntervalMs, out var heartbeatIntervalMs)
-            ? heartbeatIntervalMs : SurgewaveBridgeConnectorConfig.DefaultHeartbeatIntervalMs.ToString());
+            ? heartbeatIntervalMs : SurgewaveBridgeConnectorConfig.DefaultHeartbeatIntervalMs.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+        _offsetTrackingEnabled = (config.TryGetValue(SurgewaveBridgeConnectorConfig.OffsetTrackingEnabled, out var offsetTrackingEnabled) ? offsetTrackingEnabled : "true") == "true";
+        _offsetSyncIntervalMs = int.Parse(config.TryGetValue(SurgewaveBridgeConnectorConfig.OffsetSyncIntervalMs, out var offsetSyncIntervalMs)
+            ? offsetSyncIntervalMs : SurgewaveBridgeConnectorConfig.DefaultOffsetSyncIntervalMs.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
 
         _cts = new CancellationTokenSource();
     }
@@ -91,6 +102,17 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         {
             records.Add(CreateHeartbeatRecord());
             _lastHeartbeat = DateTime.UtcNow;
+        }
+
+        // Emit an offset-sync checkpoint of what has actually been committed downstream
+        if (_offsetTrackingEnabled && _offsetSyncIntervalMs > 0 &&
+            (DateTime.UtcNow - _lastOffsetSync).TotalMilliseconds >= _offsetSyncIntervalMs)
+        {
+            var checkpoint = CreateCheckpointRecord();
+            if (checkpoint != null)
+                records.Add(checkpoint);
+
+            _lastOffsetSync = DateTime.UtcNow;
         }
 
         // Drain pending records
@@ -126,15 +148,10 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
 
                     var record = new SourceRecord
                     {
-                        SourcePartition = new Dictionary<string, object>
-                        {
-                            ["cluster"] = _sourceClusterAlias,
-                            ["topic"] = key.topic,
-                            ["partition"] = key.partition
-                        },
+                        SourcePartition = CreateSourcePartition(key.topic, key.partition),
                         SourceOffset = new Dictionary<string, object>
                         {
-                            ["offset"] = msg.Offset
+                            [OffsetKey] = msg.Offset
                         },
                         Topic = targetTopic,
                         Partition = targetPartition,
@@ -145,8 +162,8 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
                         {
                             ["source.cluster"] = Encoding.UTF8.GetBytes(_sourceClusterAlias),
                             ["source.topic"] = Encoding.UTF8.GetBytes(key.topic),
-                            ["source.partition"] = Encoding.UTF8.GetBytes(key.partition.ToString()),
-                            ["source.offset"] = Encoding.UTF8.GetBytes(msg.Offset.ToString())
+                            ["source.partition"] = Encoding.UTF8.GetBytes(key.partition.ToString(CultureInfo.InvariantCulture)),
+                            ["source.offset"] = Encoding.UTF8.GetBytes(msg.Offset.ToString(CultureInfo.InvariantCulture))
                         }
                     };
 
@@ -161,9 +178,11 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
             {
                 // Poll timeout, continue to next partition
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Log and continue
+                // Surface so a partition that keeps failing to replicate stays visible,
+                // then continue with the remaining partitions.
+                Context?.RaiseError?.Invoke(ex);
             }
         }
 
@@ -175,7 +194,7 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         // Connect to source cluster
         var parts = _sourceBootstrapServers.Split(':');
         var host = parts[0];
-        var port = parts.Length > 1 ? int.Parse(parts[1]) : 9092;
+        var port = parts.Length > 1 ? int.Parse(parts[1], CultureInfo.InvariantCulture) : 9092;
         _sourceClient = new SurgewaveNativeClient(host, port);
         await _sourceClient.ConnectAsync(cancellationToken);
 
@@ -216,16 +235,42 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
 
             for (int partition = 0; partition < topicDesc.PartitionCount; partition++)
             {
-                long startOffset = 0;
-                if (_startFromLatest)
-                {
-                    startOffset = await _sourceClient.Messaging.GetLatestOffsetAsync(topic, partition, cancellationToken);
-                }
-
-                _currentOffsets[(topic, partition)] = startOffset;
+                _currentOffsets[(topic, partition)] = await ResolveStartOffsetAsync(topic, partition, cancellationToken);
             }
         }
     }
+
+    /// <summary>
+    /// Resumes a partition where the previous run left off, falling back to the configured
+    /// earliest/latest start when nothing has been committed for it yet.
+    /// </summary>
+    private async Task<long> ResolveStartOffsetAsync(string topic, int partition, CancellationToken cancellationToken)
+    {
+        if (_offsetTrackingEnabled)
+        {
+            var stored = Context?.OffsetStorageReader?.Offset(CreateSourcePartition(topic, partition));
+
+            if (stored != null && stored.TryGetValue(OffsetKey, out var storedOffset) && storedOffset != null)
+            {
+                var lastReplicated = Convert.ToInt64(storedOffset, CultureInfo.InvariantCulture);
+                _committedOffsets[(topic, partition)] = lastReplicated;
+
+                // The stored value is the offset of the last replicated message
+                return lastReplicated + 1;
+            }
+        }
+
+        return _startFromLatest
+            ? await _sourceClient!.Messaging.GetLatestOffsetAsync(topic, partition, cancellationToken)
+            : 0;
+    }
+
+    private Dictionary<string, object> CreateSourcePartition(string topic, int partition) => new()
+    {
+        ["cluster"] = _sourceClusterAlias,
+        ["topic"] = topic,
+        ["partition"] = partition
+    };
 
     private string GetTargetTopic(string sourceTopic)
     {
@@ -267,14 +312,70 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         };
     }
 
+    /// <summary>
+    /// Builds a checkpoint of the source offsets that are confirmed replicated, so a
+    /// failover target can pick the replication up where this task left it.
+    /// </summary>
+    private SourceRecord? CreateCheckpointRecord()
+    {
+        if (_committedOffsets.IsEmpty)
+            return null;
+
+        var checkpoint = new
+        {
+            source_cluster = _sourceClusterAlias,
+            timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            offsets = _committedOffsets
+                .ToArray()
+                .Select(kvp => new
+                {
+                    topic = kvp.Key.topic,
+                    partition = kvp.Key.partition,
+                    offset = kvp.Value
+                })
+                .ToArray()
+        };
+
+        return new SourceRecord
+        {
+            SourcePartition = new Dictionary<string, object> { ["type"] = "checkpoint" },
+            SourceOffset = new Dictionary<string, object> { ["id"] = Interlocked.Increment(ref _messageId) },
+            Topic = $"{_sourceClusterAlias}.checkpoints",
+            Key = Encoding.UTF8.GetBytes(_sourceClusterAlias),
+            Value = JsonSerializer.SerializeToUtf8Bytes(checkpoint),
+            Timestamp = DateTimeOffset.UtcNow
+        };
+    }
+
     public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
     {
-        // Offset tracking for failover could be implemented here
+        if (!_offsetTrackingEnabled)
+            return;
+
+        // Heartbeat and checkpoint records carry no replication cursor
+        if (!record.SourcePartition.TryGetValue("topic", out var topicValue) ||
+            !record.SourcePartition.TryGetValue("partition", out var partitionValue) ||
+            !record.SourceOffset.TryGetValue(OffsetKey, out var offsetValue) ||
+            topicValue == null || partitionValue == null || offsetValue == null)
+        {
+            return;
+        }
+
+        var topic = topicValue.ToString();
+        if (string.IsNullOrEmpty(topic))
+            return;
+
+        var partition = Convert.ToInt32(partitionValue, CultureInfo.InvariantCulture);
+        var offset = Convert.ToInt64(offsetValue, CultureInfo.InvariantCulture);
+
+        _committedOffsets.AddOrUpdate((topic, partition), offset, (_, previous) => Math.Max(previous, offset));
     }
 
     public override void Stop()
     {
         _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
     }
 
     protected override void Dispose(bool disposing)
@@ -282,8 +383,10 @@ public sealed class SurgewaveBridgeSourceTask : SourceTask
         if (disposing)
         {
             Stop();
-            _sourceClient?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             _cts?.Dispose();
+            _cts = null;
+            _sourceClient?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            _sourceClient = null;
         }
         base.Dispose(disposing);
     }

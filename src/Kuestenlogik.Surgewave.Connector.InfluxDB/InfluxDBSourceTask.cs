@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using InfluxDB.Client;
@@ -14,6 +15,9 @@ namespace Kuestenlogik.Surgewave.Connector.InfluxDB;
 [SuppressMessage("Reliability", "CA2213:Disposable fields should be disposed", Justification = "Client disposed in Stop()")]
 public sealed class InfluxDBSourceTask : SourceTask
 {
+    /// <summary>RFC3339 with tick precision - accepted by Flux and round-trips through offset storage.</summary>
+    private const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'";
+
     public override string Version => "1.0.0";
 
     private InfluxDBClient? _client;
@@ -56,10 +60,30 @@ public sealed class InfluxDBSourceTask : SourceTask
         };
 
         _client = new InfluxDBClient(url, token);
+
+        RestoreOffset();
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
         => config.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value) ? value : defaultValue;
+
+    private void RestoreOffset()
+    {
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+        if (storedOffset == null)
+            return;
+
+        // Resume from the last emitted point instead of replaying the whole configured range
+        if (storedOffset.TryGetValue(InfluxDBConnectorConfig.OffsetTimestamp, out var timestamp) && timestamp != null &&
+            DateTimeOffset.TryParse(timestamp.ToString(), CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed))
+        {
+            _lastTimestamp = parsed;
+        }
+    }
+
+    private static string FormatTimestamp(DateTimeOffset timestamp)
+        => timestamp.ToUniversalTime().ToString(TimestampFormat, CultureInfo.InvariantCulture);
 
     public override void Stop()
     {
@@ -125,15 +149,21 @@ public sealed class InfluxDBSourceTask : SourceTask
                     break;
             }
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"InfluxDB poll error: {ex.Message}");
+            // Surface query failures (bad token, unreachable server, invalid Flux) instead of
+            // silently returning an empty batch forever; the next poll retries.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
     }
 
-    private string BuildQuery()
+    internal string BuildQuery()
     {
         if (!string.IsNullOrEmpty(_customQuery))
         {
@@ -152,8 +182,9 @@ public sealed class InfluxDBSourceTask : SourceTask
         }
         else if (_lastTimestamp.HasValue)
         {
-            // Incremental polling from last timestamp
-            sb.AppendLine($"  |> range(start: {_lastTimestamp.Value:yyyy-MM-ddTHH:mm:ss.fffZ})");
+            // Incremental polling from last timestamp. Flux 'range' start is inclusive, so start
+            // one tick past the newest emitted point - otherwise every poll re-emits it as a duplicate.
+            sb.AppendLine($"  |> range(start: {FormatTimestamp(_lastTimestamp.Value.AddTicks(1))})");
         }
         else
         {
@@ -190,9 +221,12 @@ public sealed class InfluxDBSourceTask : SourceTask
         var headers = BuildHeaders(record, measurement);
 
         var sourceOffset = new Dictionary<string, object>();
-        if (record.GetTime() != null)
+        var recordTime = record.GetTimeInDateTime();
+        if (recordTime.HasValue)
         {
-            sourceOffset[InfluxDBConnectorConfig.OffsetTimestamp] = record.GetTime()!.ToString()!;
+            // Tick precision so the restored cursor is exactly this record's timestamp
+            sourceOffset[InfluxDBConnectorConfig.OffsetTimestamp] =
+                FormatTimestamp(new DateTimeOffset(recordTime.Value, TimeSpan.Zero));
         }
 
         return new SourceRecord
@@ -270,7 +304,8 @@ public sealed class InfluxDBSourceTask : SourceTask
 
     public override Task CommitAsync(CancellationToken cancellationToken)
     {
-        // Offsets tracked internally
+        // Nothing to acknowledge upstream: every record carries its own cursor in SourceOffset
+        // and Start() restores it from offset storage, so a restart resumes where this task stopped.
         return Task.CompletedTask;
     }
 

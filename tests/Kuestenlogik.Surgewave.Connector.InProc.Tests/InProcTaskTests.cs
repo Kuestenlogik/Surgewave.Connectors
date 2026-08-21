@@ -396,4 +396,123 @@ public sealed class InProcTaskTests : IDisposable
         var received = await sourceTask.PollAsync(cts.Token);
         Assert.Single(received);
     }
+
+    private static Dictionary<string, string> SharedMemorySinkConfig(string name) => new()
+    {
+        [InProcConnectorConfig.Topics] = "test",
+        [InProcConnectorConfig.Mode] = InProcConnectorConfig.ModeSharedMemory,
+        [InProcConnectorConfig.SharedMemoryName] = name,
+        [InProcConnectorConfig.SharedMemorySize] = "4096"
+    };
+
+    private static Dictionary<string, string> SharedMemorySourceConfig(string name) => new()
+    {
+        [InProcConnectorConfig.Topic] = "test",
+        [InProcConnectorConfig.Mode] = InProcConnectorConfig.ModeSharedMemory,
+        [InProcConnectorConfig.SharedMemoryName] = name,
+        [InProcConnectorConfig.SharedMemorySize] = "4096"
+    };
+
+    [Fact]
+    public async Task InProc_SharedMemory_DoesNotReEmitConsumedMessages()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var name = "sw-shm-" + Guid.NewGuid().ToString("N");
+
+        var sinkTask = CreateSinkTask();
+        sinkTask.Initialize(new TaskContext { RaiseError = _ => { } });
+        sinkTask.Start(SharedMemorySinkConfig(name));
+
+        var sourceTask = CreateSourceTask();
+        sourceTask.Initialize(new TaskContext { RaiseError = _ => { } });
+        sourceTask.Start(SharedMemorySourceConfig(name));
+
+        var records = new List<SinkRecord>
+        {
+            new() { Topic = "test", Partition = 0, Offset = 0, Value = Encoding.UTF8.GetBytes("shm-0") },
+            new() { Topic = "test", Partition = 0, Offset = 1, Value = Encoding.UTF8.GetBytes("shm-1") },
+            new() { Topic = "test", Partition = 0, Offset = 2, Value = Encoding.UTF8.GetBytes("shm-2") }
+        };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sinkTask.PutAsync(records, cts.Token);
+
+        var received = await sourceTask.PollAsync(cts.Token);
+
+        Assert.Equal(3, received.Count);
+        Assert.Equal("shm-0", Encoding.UTF8.GetString(received[0].Value!));
+        Assert.Equal("shm-2", Encoding.UTF8.GetString(received[2].Value!));
+
+        // Polling again must not replay the same messages.
+        Assert.Empty(await sourceTask.PollAsync(cts.Token));
+
+        // The read cursor is published on commit, so a restarted reader resumes behind them.
+        await sourceTask.CommitAsync(cts.Token);
+
+        var restartedTask = CreateSourceTask();
+        restartedTask.Initialize(new TaskContext { RaiseError = _ => { } });
+        restartedTask.Start(SharedMemorySourceConfig(name));
+
+        Assert.Empty(await restartedTask.PollAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task InProc_SharedMemory_ThrowsWhenFullInsteadOfOverwriting()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var name = "sw-shm-full-" + Guid.NewGuid().ToString("N");
+
+        var sinkTask = CreateSinkTask();
+        sinkTask.Initialize(new TaskContext { RaiseError = _ => { } });
+        sinkTask.Start(SharedMemorySinkConfig(name));
+
+        var payload = new byte[1024];
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            for (var i = 0; i < 256; i++)
+            {
+                await sinkTask.PutAsync(
+                    [new SinkRecord { Topic = "test", Partition = 0, Offset = i, Value = payload }],
+                    cts.Token);
+            }
+        });
+
+        Assert.Contains("full", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InProc_SharedMemory_SkipsOversizedRecordAndRaisesError()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var name = "sw-shm-big-" + Guid.NewGuid().ToString("N");
+        var errors = new List<Exception>();
+
+        var sinkTask = CreateSinkTask();
+        sinkTask.Initialize(new TaskContext { RaiseError = errors.Add });
+        sinkTask.Start(SharedMemorySinkConfig(name));
+
+        var sourceTask = CreateSourceTask();
+        sourceTask.Initialize(new TaskContext { RaiseError = _ => { } });
+        sourceTask.Start(SharedMemorySourceConfig(name));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sinkTask.PutAsync(
+            [
+                new SinkRecord { Topic = "test", Partition = 0, Offset = 0, Value = new byte[64 * 1024] },
+                new SinkRecord { Topic = "test", Partition = 0, Offset = 1, Value = Encoding.UTF8.GetBytes("fits") }
+            ],
+            cts.Token);
+
+        Assert.Single(errors);
+
+        var received = await sourceTask.PollAsync(cts.Token);
+
+        Assert.Single(received);
+        Assert.Equal("fits", Encoding.UTF8.GetString(received[0].Value!));
+    }
 }

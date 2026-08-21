@@ -7,7 +7,10 @@ namespace Kuestenlogik.Surgewave.Connector.VectorStore;
 /// <summary>
 /// Sink task that parses JSON records and upserts vector entries into the embedded store.
 /// Supports tombstone records (null value) for deletion.
-/// On flush, optionally persists a snapshot to a compacted Surgewave topic.
+/// On flush, optionally publishes a full snapshot to a compacted Surgewave topic. The snapshot uses
+/// the same JSON shape this task reads, so a collection is restored by replaying that topic through
+/// a second sink instance on the same collection name. Nothing is restored on start: the Connect
+/// runtime gives a sink task a producer, but no consumer of its own.
 /// </summary>
 public sealed class VectorStoreSinkTask : SinkTask
 {

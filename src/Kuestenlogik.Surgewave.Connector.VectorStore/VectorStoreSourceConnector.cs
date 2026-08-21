@@ -5,7 +5,8 @@ namespace Kuestenlogik.Surgewave.Connector.VectorStore;
 
 /// <summary>
 /// Source connector that queries an embedded vector store by similarity search.
-/// Reads query vectors from an input topic and produces search results to an output topic.
+/// Query vectors are handed to the task in-process; the Connect runtime cannot consume the
+/// configured query topic for a source task, so <see cref="VectorStoreSourceTask.PollAsync"/> fails.
 /// </summary>
 [ConnectorMetadata(
     Name = "Vector Store Source",
@@ -27,7 +28,8 @@ public sealed class VectorStoreSourceConnector : SourceConnector
     public override ConfigDef Config => new ConfigDef()
         .Define(CollectionNameConfig, ConfigType.String, Importance.High, "Collection name for the vector store")
         .Define(TopicConfig, ConfigType.String, Importance.High, "Output topic for search results")
-        .Define(QueryTopicConfig, ConfigType.String, Importance.High, "Topic containing query vectors")
+        .Define(QueryTopicConfig, ConfigType.String, Importance.High,
+            "Topic containing query vectors (in-process use only - a Connect source task cannot consume it)")
         .Define(TopKConfig, ConfigType.Int, 5, Importance.Medium, "Maximum number of results per query")
         .Define(MinSimilarityConfig, ConfigType.String, "0.0", Importance.Medium, "Minimum cosine similarity threshold");
 

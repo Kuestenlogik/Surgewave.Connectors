@@ -55,13 +55,13 @@ public sealed class MirrorMakerConfig
     public int OffsetSyncIntervalMs { get; init; } = 60000;
     public bool SyncGroupOffsets { get; init; } = true;
 
-    // Heartbeat
+    // Heartbeat - an empty topic name means the replication policy names the topic
     public int HeartbeatIntervalMs { get; init; } = 1000;
-    public string HeartbeatsTopic { get; init; } = "heartbeats";
+    public string HeartbeatsTopic { get; init; } = "";
 
-    // Checkpoint
+    // Checkpoint - an empty topic name means the replication policy names the topic
     public int CheckpointIntervalMs { get; init; } = 60000;
-    public string CheckpointsTopic { get; init; } = "checkpoints.internal";
+    public string CheckpointsTopic { get; init; } = "";
 
     // Topic naming policy
     public string ReplicationPolicyClass { get; init; } =
@@ -112,9 +112,9 @@ public sealed class MirrorMakerConfig
             OffsetSyncIntervalMs = int.Parse(Get(config, "offset.sync.interval.ms", "60000")),
             SyncGroupOffsets = bool.Parse(Get(config, "sync.group.offsets.enabled", "true")),
             HeartbeatIntervalMs = int.Parse(Get(config, "heartbeats.interval.ms", "1000")),
-            HeartbeatsTopic = Get(config, "heartbeats.topic", "heartbeats"),
+            HeartbeatsTopic = Get(config, "heartbeats.topic", ""),
             CheckpointIntervalMs = int.Parse(Get(config, "checkpoints.interval.ms", "60000")),
-            CheckpointsTopic = Get(config, "checkpoints.topic", "checkpoints.internal"),
+            CheckpointsTopic = Get(config, "checkpoints.topic", ""),
             ReplicationPolicyClass = Get(config, "replication.policy.class",
                 "Kuestenlogik.Surgewave.Connect.Mirror.Policies.DefaultReplicationPolicy"),
             ReplicationPolicySeparator = Get(config, "replication.policy.separator", "."),

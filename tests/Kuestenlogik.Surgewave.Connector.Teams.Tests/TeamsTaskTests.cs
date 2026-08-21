@@ -80,4 +80,73 @@ public sealed class TeamsTaskTests
         task.Stop();
         // Should not throw
     }
+
+    [Fact]
+    public void TeamsSourceTask_Start_RestoresCursorFromOffsetStorage()
+    {
+        var reader = new RecordingOffsetStorageReader(new Dictionary<string, object>
+        {
+            [TeamsConnectorConfig.OffsetCursor] = "2026-01-02T03:04:05.0000000+00:00",
+            [TeamsConnectorConfig.OffsetMessageId] = "message-1"
+        });
+
+        using var task = new TeamsSourceTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { }, OffsetStorageReader = reader });
+        task.Start(SourceConfig());
+
+        // The task must ask offset storage for its own team/channel partition instead of
+        // starting from "now" and dropping everything posted while it was stopped.
+        var partition = Assert.Single(reader.RequestedPartitions);
+        Assert.Equal("team-1", partition[TeamsConnectorConfig.PartitionTeamId]);
+        Assert.Equal("channel-1", partition[TeamsConnectorConfig.PartitionChannelId]);
+    }
+
+    [Fact]
+    public void TeamsSourceTask_Start_WithoutStoredOffset_StillQueriesOffsetStorage()
+    {
+        var reader = new RecordingOffsetStorageReader(null);
+
+        using var task = new TeamsSourceTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { }, OffsetStorageReader = reader });
+        task.Start(SourceConfig());
+
+        Assert.Single(reader.RequestedPartitions);
+        // Should not throw when nothing was stored yet
+    }
+
+    private static Dictionary<string, string> SourceConfig() => new()
+    {
+        [TeamsConnectorConfig.Topic] = "teams-messages",
+        [TeamsConnectorConfig.TenantId] = "00000000-0000-0000-0000-000000000000",
+        [TeamsConnectorConfig.ClientId] = "11111111-1111-1111-1111-111111111111",
+        [TeamsConnectorConfig.ClientSecret] = "test-secret",
+        [TeamsConnectorConfig.TeamId] = "team-1",
+        [TeamsConnectorConfig.ChannelId] = "channel-1"
+    };
+
+    private sealed class RecordingOffsetStorageReader(IDictionary<string, object>? storedOffset) : IOffsetStorageReader
+    {
+        public List<IDictionary<string, object>> RequestedPartitions { get; } = [];
+
+        public IDictionary<string, object>? Offset(IDictionary<string, object> partition)
+        {
+            RequestedPartitions.Add(partition);
+            return storedOffset;
+        }
+
+        public IDictionary<IDictionary<string, object>, IDictionary<string, object>> Offsets(
+            IReadOnlyCollection<IDictionary<string, object>> partitions)
+        {
+            var result = new Dictionary<IDictionary<string, object>, IDictionary<string, object>>();
+
+            foreach (var partition in partitions)
+            {
+                var offset = Offset(partition);
+                if (offset != null)
+                    result[partition] = offset;
+            }
+
+            return result;
+        }
+    }
 }

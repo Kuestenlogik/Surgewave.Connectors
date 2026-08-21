@@ -351,22 +351,6 @@ public sealed class HttpSourceTask : SourceTask
 
         var records = new List<SourceRecord>();
 
-        // Check if SSE reader task has faulted - need to reconnect
-        if (_sseReaderTask != null && _sseReaderTask.IsCompleted)
-        {
-            if (_sseReaderTask.IsFaulted || _sseReaderTask.IsCanceled)
-            {
-                // SSE connection lost, switch back to poll mode for reconnection
-                StopSseReader();
-                _sseMode = false;
-                _sseChannel = null;
-
-                // Wait before reconnecting
-                await Task.Delay((int)_sseReconnectDelayMs, cancellationToken);
-                return [];
-            }
-        }
-
         // Try to read available events (non-blocking batch)
         while (_sseChannel.Reader.TryRead(out var sseEvent))
         {
@@ -375,6 +359,27 @@ public sealed class HttpSourceTask : SourceTask
             // Limit batch size
             if (records.Count >= 100)
                 break;
+        }
+
+        // The reader task ended: a fault, a cancellation and a graceful server close all mean
+        // the stream is over. Once the buffered events are drained, leave SSE mode so the next
+        // poll reconnects (with Last-Event-ID) instead of returning empty forever.
+        var readerTask = _sseReaderTask;
+        if (records.Count == 0 && readerTask?.IsCompleted == true)
+        {
+            if (readerTask.IsFaulted && readerTask.Exception != null)
+            {
+                Context?.RaiseError?.Invoke(readerTask.Exception.GetBaseException());
+            }
+
+            // SSE connection lost, switch back to poll mode for reconnection
+            StopSseReader();
+            _sseMode = false;
+            _sseChannel = null;
+
+            // Wait before reconnecting
+            await Task.Delay((int)_sseReconnectDelayMs, cancellationToken);
+            return [];
         }
 
         // If no events, wait briefly for one

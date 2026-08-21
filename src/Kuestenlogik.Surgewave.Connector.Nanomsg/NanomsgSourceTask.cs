@@ -103,9 +103,11 @@ public sealed class NanomsgSourceTask : SourceTask
         {
             // Timeout or resource unavailable - return what we have
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Never swallow: a persistent socket failure has to stay visible instead of
+            // degenerating into silent empty polls.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return Task.FromResult<IReadOnlyList<SourceRecord>>(records);

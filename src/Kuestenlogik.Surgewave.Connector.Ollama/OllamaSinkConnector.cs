@@ -25,8 +25,10 @@ public sealed class OllamaSinkConnector : SinkConnector
         .Define(OllamaConnectorConfig.TopicsConfig, ConfigType.String, Importance.High,
             "Comma-separated list of input topics to consume", EditorHint.Topic)
         // Output
+        .Define(OllamaConnectorConfig.OutputTopicConfig, ConfigType.String, "", Importance.Medium,
+            "Topic to produce results to (optional, requires a worker-provided producer)", EditorHint.Topic)
         .Define(OllamaConnectorConfig.WebhookUrlConfig, ConfigType.String, "", Importance.Medium,
-            "Webhook URL to POST results (optional, logs to console if not set)")
+            "Webhook URL to POST results (optional, used when no output topic is set; logs to console if neither is set)")
         // Mode
         .Define(OllamaConnectorConfig.ModeConfig, ConfigType.String, OllamaConnectorConfig.ModeEmbeddings, Importance.High,
             "Processing mode: 'embeddings' or 'completions'", EditorHint.Select, options: ["embeddings", "completions"])

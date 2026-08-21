@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using NsqSharp;
+using NsqSharp.Utils;
 using Kuestenlogik.Surgewave.Connect;
 
 namespace Kuestenlogik.Surgewave.Connector.Nsq;
@@ -39,6 +40,17 @@ public sealed class NsqSinkTask : SinkTask
         if (config.TryGetValue(NsqConnectorConfig.AuthSecret, out var authSecret) && !string.IsNullOrEmpty(authSecret))
         {
             nsqConfig.AuthSecret = authSecret;
+        }
+
+        // Configure TLS if enabled (nsqd negotiates TLS during IDENTIFY)
+        if (config.TryGetValue(NsqConnectorConfig.TlsEnabled, out var tlsEnabled) &&
+            bool.TryParse(tlsEnabled, out var useTls) && useTls)
+        {
+            nsqConfig.TlsConfig = new TlsConfig
+            {
+                InsecureSkipVerify = config.TryGetValue(NsqConnectorConfig.TlsInsecureSkipVerify, out var skipVerify)
+                    && bool.TryParse(skipVerify, out var skip) && skip
+            };
         }
 
         _producer = new Producer(_nsqdAddress, nsqConfig);

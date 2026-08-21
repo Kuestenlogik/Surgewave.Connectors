@@ -30,8 +30,10 @@ public sealed class MessengerSinkConnector : SinkConnector
             "JSON field containing recipient PSID")
         .Define(MessengerConnectorConfig.MessageTextField, ConfigType.String, "text", Importance.Medium,
             "JSON field containing message text")
+        .Define(MessengerConnectorConfig.QuickRepliesField, ConfigType.String, "quick_replies", Importance.Low,
+            "JSON field containing the quick reply array - required for quick_replies messages")
         .Define(MessengerConnectorConfig.MessageType, ConfigType.String, MessengerConnectorConfig.DefaultMessageType, Importance.Medium,
-            "Message type: text, template, quick_replies");
+            "Message type: text, quick_replies", EditorHint.Select, options: ["text", "quick_replies"]);
 
     public override void Start(IDictionary<string, string> config)
     {

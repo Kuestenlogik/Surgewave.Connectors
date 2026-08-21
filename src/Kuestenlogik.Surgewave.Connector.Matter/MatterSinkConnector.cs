@@ -21,7 +21,7 @@ public sealed class MatterSinkConnector : SinkConnector
         .Define(MatterConnectorConfig.Topics, ConfigType.List, Importance.High,
             "Surgewave topics to consume device commands from", EditorHint.Topic)
         .Define(MatterConnectorConfig.ControllerUrl, ConfigType.String, Importance.High,
-            "Matter controller API URL (e.g., http://localhost:5580)")
+            "Matter REST bridge base URL exposing POST /api/command (e.g., http://localhost:5580); the python-matter-server WebSocket API is not supported")
         .Define(MatterConnectorConfig.ApiKey, ConfigType.Password, "", Importance.Medium,
             "Matter controller API key (if required)")
         .Define(MatterConnectorConfig.DefaultNodeId, ConfigType.String, "", Importance.Medium,

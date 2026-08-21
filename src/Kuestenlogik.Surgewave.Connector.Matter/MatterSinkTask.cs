@@ -9,6 +9,10 @@ namespace Kuestenlogik.Surgewave.Connector.Matter;
 /// <summary>
 /// Task that controls Matter devices via a Matter controller.
 /// </summary>
+/// <remarks>
+/// Speaks a REST bridge contract - <c>POST {controller}/api/command</c> - not the WebSocket
+/// protocol of python-matter-server. Point <c>matter.controller.url</c> at a bridge exposing it.
+/// </remarks>
 [SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Interface used for extensibility")]
 [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient disposed in Dispose()")]
 [SuppressMessage("Usage", "CA2234:Pass System.Uri objects instead of strings", Justification = "URL strings are simpler for REST API calls")]
@@ -47,35 +51,52 @@ public sealed class MatterSinkTask : SinkTask
 
             try
             {
-                using var doc = JsonDocument.Parse(record.Value);
-                var root = doc.RootElement;
-
-                // Get node ID from payload, headers, or default
-                var nodeId = GetString(root, "nodeId", record.Headers) ?? _defaultNodeId;
-                if (string.IsNullOrEmpty(nodeId)) continue;
-
-                // Get endpoint ID
-                var endpointId = _defaultEndpointId;
-                if (root.TryGetProperty("endpointId", out var epProp))
-                    endpointId = epProp.GetInt32();
-
-                // Determine command type
-                var command = GetString(root, "command", record.Headers);
-
-                if (command != null)
-                {
-                    await ExecuteCommandAsync(nodeId, endpointId, command, root, cancellationToken);
-                }
-                else
-                {
-                    // Infer command from state properties
-                    await ExecuteStateCommandsAsync(nodeId, endpointId, root, cancellationToken);
-                }
+                // A delivery failure must escape this loop so the worker retries/DLQs the batch
+                // instead of committing offsets for commands the controller never accepted.
+                await SendRecordAsync(record, cancellationToken);
             }
-            catch (Exception)
+            catch (JsonException ex)
             {
-                // Log and continue
+                // Poison record: unparseable payload - skip it, but make it visible
+                Context?.RaiseError?.Invoke(ex);
             }
+        }
+    }
+
+    private async Task SendRecordAsync(SinkRecord record, CancellationToken cancellationToken)
+    {
+        using var doc = JsonDocument.Parse(record.Value);
+        var root = doc.RootElement;
+
+        // Get node ID from payload, headers, or default
+        var nodeId = GetString(root, "nodeId", record.Headers) ?? _defaultNodeId;
+        if (string.IsNullOrEmpty(nodeId))
+        {
+            // Poison record: no device to address - skip it, but make it visible
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Matter sink record {record.Topic}/{record.Partition}@{record.Offset} has no nodeId and no default node is configured"));
+            return;
+        }
+
+        // Get endpoint ID
+        var endpointId = _defaultEndpointId;
+        if (root.TryGetProperty("endpointId", out var epProp) &&
+            epProp.ValueKind == JsonValueKind.Number && epProp.TryGetInt32(out var parsedEndpointId))
+        {
+            endpointId = parsedEndpointId;
+        }
+
+        // Determine command type
+        var command = GetString(root, "command", record.Headers);
+
+        if (command != null)
+        {
+            await ExecuteCommandAsync(nodeId, endpointId, command, root, cancellationToken);
+        }
+        else
+        {
+            // Infer command from state properties
+            await ExecuteStateCommandsAsync(nodeId, endpointId, root, cancellationToken);
         }
     }
 
@@ -84,17 +105,27 @@ public sealed class MatterSinkTask : SinkTask
         var cluster = GetString(root, "cluster", null) ?? InferClusterFromCommand(command);
         var args = root.TryGetProperty("args", out var argsProp) ? argsProp : default;
 
-        var payload = new
+        await PostCommandAsync(new
         {
             node_id = nodeId,
             endpoint_id = endpointId,
             cluster,
             command,
             args
-        };
+        }, nodeId, command, ct);
+    }
 
-        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-        await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+    private async Task PostCommandAsync(object payload, string nodeId, string command, CancellationToken ct)
+    {
+        using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        using var response = await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            var ex = new HttpRequestException(
+                $"Matter command '{command}' for node '{nodeId}' failed with status {(int)response.StatusCode} ({response.StatusCode})");
+            Context?.RaiseError?.Invoke(ex);
+            throw ex;
+        }
     }
 
     private async Task ExecuteStateCommandsAsync(string nodeId, int endpointId, JsonElement root, CancellationToken ct)
@@ -103,47 +134,41 @@ public sealed class MatterSinkTask : SinkTask
         if (root.TryGetProperty("on", out var onProp))
         {
             var command = onProp.GetBoolean() ? "On" : "Off";
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "OnOff",
                 command
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, command, ct);
         }
 
         // Handle brightness (level control)
         if (root.TryGetProperty("brightness", out var briProp))
         {
             var level = briProp.GetInt32();
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "LevelControl",
                 command = "MoveToLevel",
                 args = new { level, transition_time = 10 }
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, "MoveToLevel", ct);
         }
 
         // Handle color temperature
         if (root.TryGetProperty("colorTemperature", out var ctProp))
         {
             var colorTemp = ctProp.GetInt32();
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "ColorControl",
                 command = "MoveToColorTemperature",
                 args = new { color_temperature_mireds = colorTemp, transition_time = 10 }
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, "MoveToColorTemperature", ct);
         }
 
         // Handle hue/saturation
@@ -151,47 +176,41 @@ public sealed class MatterSinkTask : SinkTask
         {
             var hue = hueProp.GetInt32();
             var saturation = satProp.GetInt32();
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "ColorControl",
                 command = "MoveToHueAndSaturation",
                 args = new { hue, saturation, transition_time = 10 }
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, "MoveToHueAndSaturation", ct);
         }
 
         // Handle thermostat setpoint
         if (root.TryGetProperty("heatingSetpoint", out var heatProp))
         {
             var setpoint = (int)(heatProp.GetDouble() * 100);
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "Thermostat",
                 command = "SetpointRaiseLower",
                 args = new { mode = 0, amount = setpoint }
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, "SetpointRaiseLower", ct);
         }
 
         // Handle door lock
         if (root.TryGetProperty("lock", out var lockProp))
         {
             var command = lockProp.GetBoolean() ? "LockDoor" : "UnlockDoor";
-            var payload = new
+            await PostCommandAsync(new
             {
                 node_id = nodeId,
                 endpoint_id = endpointId,
                 cluster = "DoorLock",
                 command
-            };
-            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            await _httpClient!.PostAsync($"{_controllerUrl}/api/command", content, ct);
+            }, nodeId, command, ct);
         }
     }
 

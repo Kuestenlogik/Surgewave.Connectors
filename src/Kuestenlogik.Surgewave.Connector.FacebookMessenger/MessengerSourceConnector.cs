@@ -22,10 +22,8 @@ public sealed class MessengerSourceConnector : SourceConnector
     public override ConfigDef Config => new ConfigDef()
         .Define(MessengerConnectorConfig.Topic, ConfigType.String, Importance.High,
             "Destination topic for Messenger messages", EditorHint.Topic)
-        .Define(MessengerConnectorConfig.PageAccessToken, ConfigType.Password, Importance.High,
-            "Facebook Page access token")
-        .Define(MessengerConnectorConfig.AppSecret, ConfigType.Password, Importance.Medium,
-            "Facebook App secret for signature verification")
+        .Define(MessengerConnectorConfig.AppSecret, ConfigType.Password, Importance.High,
+            "Facebook App secret - when set, X-Hub-Signature-256 on every webhook POST is verified")
         .Define(MessengerConnectorConfig.WebhookVerifyToken, ConfigType.Password, Importance.High,
             "Token for webhook verification")
         .Define(MessengerConnectorConfig.WebhookPort, ConfigType.Int, MessengerConnectorConfig.DefaultWebhookPort, Importance.Medium,

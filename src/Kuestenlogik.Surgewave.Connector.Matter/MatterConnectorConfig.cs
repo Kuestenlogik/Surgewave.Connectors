@@ -8,7 +8,6 @@ public static class MatterConnectorConfig
     // Controller connection
     public const string ControllerUrl = "matter.controller.url";
     public const string ApiKey = "matter.api.key";
-    public const string CommissionerNodeId = "matter.commissioner.node.id";
 
     // Source settings
     public const string Topic = "topic";

@@ -24,6 +24,7 @@ public static class ICalConnectorConfig
     // Sink settings
     public const string OutputModeConfig = "ical.output.mode";
     public const string OutputPathConfig = "ical.output.path";
+    public const string OutputTopicConfig = "ical.output.topic";
     public const string CalendarNameConfig = "ical.calendar.name";
     public const string CalendarProductIdConfig = "ical.calendar.prodid";
     public const string DefaultDurationMinutesConfig = "ical.default.duration.minutes";

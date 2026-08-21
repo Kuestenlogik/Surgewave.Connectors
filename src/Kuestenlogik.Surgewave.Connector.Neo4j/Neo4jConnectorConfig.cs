@@ -59,6 +59,7 @@ public static class Neo4jConnectorConfig
 
     // Offset Tracking Keys
     public const string OffsetTimestamp = "timestamp";
+    public const string OffsetTimestampType = "timestamp_type";
     public const string OffsetId = "id";
     public const string OffsetElementId = "element_id";
 }

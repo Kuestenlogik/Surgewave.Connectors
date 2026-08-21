@@ -20,6 +20,8 @@ public sealed class ICalSinkConnector : SinkConnector
             "Output mode: 'file' (write to .ics file) or 'record' (emit as record value)")
         .Define(ICalConnectorConfig.OutputPathConfig, ConfigType.String, "", Importance.Medium,
             "Output file path for file mode (supports ${topic} and ${timestamp} placeholders)", EditorHint.FilePath)
+        .Define(ICalConnectorConfig.OutputTopicConfig, ConfigType.String, "", Importance.Medium,
+            "Topic the generated ICS is produced to in record mode (required for record mode)", EditorHint.Topic)
         .Define(ICalConnectorConfig.CalendarNameConfig, ConfigType.String, ICalConnectorConfig.DefaultCalendarName, Importance.Low,
             "Calendar name (X-WR-CALNAME)")
         .Define(ICalConnectorConfig.CalendarProductIdConfig, ConfigType.String, ICalConnectorConfig.DefaultCalendarProductId, Importance.Low,
@@ -63,6 +65,22 @@ public sealed class ICalSinkConnector : SinkConnector
             {
                 throw new ArgumentException($"File mode requires {ICalConnectorConfig.OutputPathConfig}");
             }
+        }
+        else if (mode == ICalConnectorConfig.OutputModeRecord)
+        {
+            // Record mode emits the generated ICS as a record; without a destination
+            // topic every consumed record would be dropped.
+            if (!config.TryGetValue(ICalConnectorConfig.OutputTopicConfig, out var outputTopic) ||
+                string.IsNullOrWhiteSpace(outputTopic))
+            {
+                throw new ArgumentException($"Record mode requires {ICalConnectorConfig.OutputTopicConfig}");
+            }
+        }
+        else
+        {
+            throw new ArgumentException(
+                $"Unknown {ICalConnectorConfig.OutputModeConfig} '{mode}'. Valid values: " +
+                $"'{ICalConnectorConfig.OutputModeFile}', '{ICalConnectorConfig.OutputModeRecord}'");
         }
     }
 

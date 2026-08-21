@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Neo4j.Driver;
@@ -31,6 +32,12 @@ public sealed class Neo4jSourceTask : SourceTask
     private DateTime _lastPollTime = DateTime.MinValue;
     private IDictionary<string, object> _sourcePartition = new Dictionary<string, object>();
 
+    // Element ids already emitted at exactly _lastTimestamp. The cursor is inclusive so
+    // rows sharing the boundary timestamp are not lost across the LIMIT; this set keeps
+    // them from being emitted twice and is cleared whenever the timestamp advances, so
+    // it never holds more than the nodes carrying one single timestamp value.
+    private readonly HashSet<string> _seenAtLastTimestamp = new(StringComparer.Ordinal);
+
     public override void Start(IDictionary<string, string> config)
     {
         var uri = config[Neo4jConnectorConfig.UriConfig];
@@ -54,6 +61,8 @@ public sealed class Neo4jSourceTask : SourceTask
             [Neo4jConnectorConfig.HeaderLabel] = _label
         };
 
+        RestoreOffset();
+
         var authToken = string.IsNullOrEmpty(username) ? AuthTokens.None : AuthTokens.Basic(username, password);
 
         _driver = GraphDatabase.Driver(new Uri(uri), authToken, builder =>
@@ -67,6 +76,75 @@ public sealed class Neo4jSourceTask : SourceTask
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
         => config.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value) ? value : defaultValue;
+
+    /// <summary>
+    /// Restores the incremental cursor from offset storage so a restart resumes where the
+    /// previous run stopped instead of re-reading every matching node.
+    /// </summary>
+    private void RestoreOffset()
+    {
+        if (string.IsNullOrEmpty(_timestampProperty))
+            return;
+
+        var offset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+        if (offset == null)
+            return;
+
+        _lastTimestamp = RestoreTimestamp(
+            GetOffsetString(offset, Neo4jConnectorConfig.OffsetTimestampType),
+            GetOffsetString(offset, Neo4jConnectorConfig.OffsetTimestamp));
+
+        if (_lastTimestamp == null)
+            return;
+
+        // The restored cursor is inclusive, so the element it was taken from must be
+        // excluded from the first query after the restart.
+        var elementId = GetOffsetString(offset, Neo4jConnectorConfig.OffsetElementId);
+        if (!string.IsNullOrEmpty(elementId))
+        {
+            _seenAtLastTimestamp.Add(elementId);
+        }
+    }
+
+    private static string? GetOffsetString(IDictionary<string, object> offset, string key)
+    {
+        if (!offset.TryGetValue(key, out var value) || value == null)
+            return null;
+
+        // Offsets that survived a restart come back as JsonElement, live ones as CLR values.
+        return value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            JsonElement element => element.ToString(),
+            _ => value.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Rebuilds the cursor value in the CLR type the Neo4j property uses, so the
+    /// comparison in the incremental query keeps working after a restart.
+    /// </summary>
+    private static object? RestoreTimestamp(string? typeName, string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return null;
+
+        return typeName switch
+        {
+            nameof(ZonedDateTime) when DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var zoned)
+                => new ZonedDateTime(zoned),
+            nameof(LocalDateTime) when DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var local)
+                => new LocalDateTime(local),
+            nameof(LocalDate) when DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date)
+                => new LocalDate(date),
+            "Int64" or "Int32" when long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number)
+                => number,
+            "Double" or "Single" when double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number)
+                => number,
+            _ => value
+        };
+    }
 
     public override void Stop()
     {
@@ -114,13 +192,24 @@ public sealed class Neo4jSourceTask : SourceTask
                 var sourceRecord = CreateSourceRecord(record);
                 records.Add(sourceRecord);
 
-                // Track timestamp for incremental polling
+                // Track timestamp for incremental polling. Rows arrive in ascending
+                // timestamp order, so a new value retires the ids seen at the old one.
                 if (!string.IsNullOrEmpty(_timestampProperty))
                 {
                     var timestamp = GetPropertyValue(record, _timestampProperty);
                     if (timestamp != null)
                     {
-                        _lastTimestamp = timestamp;
+                        if (!Equals(_lastTimestamp, timestamp))
+                        {
+                            _lastTimestamp = timestamp;
+                            _seenAtLastTimestamp.Clear();
+                        }
+
+                        var elementId = GetElementId(record);
+                        if (elementId != null)
+                        {
+                            _seenAtLastTimestamp.Add(elementId);
+                        }
                     }
                 }
 
@@ -130,7 +219,9 @@ public sealed class Neo4jSourceTask : SourceTask
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Neo4j poll error: {ex.Message}");
+            // Make poll failures visible to the Connect framework instead of silently
+            // returning an empty batch.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -146,10 +237,19 @@ public sealed class Neo4jSourceTask : SourceTask
         var sb = new StringBuilder();
         sb.Append($"MATCH (n:{_label})");
 
-        // Add incremental filter if timestamp property is set
+        // Add incremental filter if timestamp property is set. The comparison is
+        // inclusive: with a strictly-greater cursor every row that shares the last
+        // batch's timestamp beyond the LIMIT boundary would be skipped forever. The
+        // rows already emitted at that timestamp are excluded by element id instead,
+        // which also keeps the query making progress.
         if (!string.IsNullOrEmpty(_timestampProperty) && _lastTimestamp != null)
         {
-            sb.Append($" WHERE n.{_timestampProperty} > $lastTimestamp");
+            sb.Append($" WHERE n.{_timestampProperty} >= $lastTimestamp");
+
+            if (_seenAtLastTimestamp.Count > 0)
+            {
+                sb.Append(" AND NOT elementId(n) IN $seenElementIds");
+            }
         }
 
         sb.Append(" RETURN n");
@@ -172,6 +272,11 @@ public sealed class Neo4jSourceTask : SourceTask
         if (!string.IsNullOrEmpty(_timestampProperty) && _lastTimestamp != null)
         {
             parameters["lastTimestamp"] = _lastTimestamp;
+
+            if (_seenAtLastTimestamp.Count > 0)
+            {
+                parameters["seenElementIds"] = _seenAtLastTimestamp.ToList();
+            }
         }
 
         return parameters;
@@ -219,7 +324,11 @@ public sealed class Neo4jSourceTask : SourceTask
             var timestamp = GetPropertyValue(record, _timestampProperty);
             if (timestamp != null)
             {
-                sourceOffset[Neo4jConnectorConfig.OffsetTimestamp] = timestamp.ToString()!;
+                // The type travels with the value so the cursor can be rebuilt in the
+                // property's own type when the task restarts.
+                sourceOffset[Neo4jConnectorConfig.OffsetTimestamp] =
+                    Convert.ToString(timestamp, CultureInfo.InvariantCulture) ?? timestamp.ToString()!;
+                sourceOffset[Neo4jConnectorConfig.OffsetTimestampType] = timestamp.GetType().Name;
             }
         }
 
@@ -254,6 +363,9 @@ public sealed class Neo4jSourceTask : SourceTask
             _ => value
         };
     }
+
+    private static string? GetElementId(IRecord record)
+        => record.Values.TryGetValue("n", out var nodeValue) && nodeValue is INode node ? node.ElementId : null;
 
     private static object? GetPropertyValue(IRecord record, string propertyName)
     {

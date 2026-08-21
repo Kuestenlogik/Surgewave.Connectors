@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Ical.Net;
+using Calendar = Ical.Net.Calendar;
 using Ical.Net.CalendarComponents;
 using Ical.Net.DataTypes;
 using Ical.Net.Serialization;
@@ -17,6 +19,7 @@ public sealed class ICalSinkTask : SinkTask
 
     private string _outputMode = ICalConnectorConfig.DefaultOutputMode;
     private string _outputPath = "";
+    private string _outputTopic = "";
     private string _calendarName = ICalConnectorConfig.DefaultCalendarName;
     private string _calendarProductId = ICalConnectorConfig.DefaultCalendarProductId;
     private int _defaultDurationMinutes = ICalConnectorConfig.DefaultDurationMinutes;
@@ -27,9 +30,12 @@ public sealed class ICalSinkTask : SinkTask
     private string _locationField = "location";
     private string _uidField = "uid";
     private int _maxEventsPerFile = ICalConnectorConfig.DefaultMaxEventsPerFile;
+    private int _flushIntervalMs = ICalConnectorConfig.DefaultFlushIntervalMs;
 
     private Calendar? _currentCalendar;
     private int _eventCount;
+    private DateTime _lastFlushUtc = DateTime.UtcNow;
+    private int _fileSequence;
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -37,6 +43,8 @@ public sealed class ICalSinkTask : SinkTask
             ? mode : ICalConnectorConfig.DefaultOutputMode;
         _outputPath = config.TryGetValue(ICalConnectorConfig.OutputPathConfig, out var path)
             ? path : "";
+        _outputTopic = config.TryGetValue(ICalConnectorConfig.OutputTopicConfig, out var outputTopic)
+            ? outputTopic : "";
         _calendarName = config.TryGetValue(ICalConnectorConfig.CalendarNameConfig, out var name)
             ? name : ICalConnectorConfig.DefaultCalendarName;
         _calendarProductId = config.TryGetValue(ICalConnectorConfig.CalendarProductIdConfig, out var prodId)
@@ -58,11 +66,33 @@ public sealed class ICalSinkTask : SinkTask
             ? uf : "uid";
         _maxEventsPerFile = config.TryGetValue(ICalConnectorConfig.MaxEventsPerFileConfig, out var max)
             ? int.Parse(max) : ICalConnectorConfig.DefaultMaxEventsPerFile;
+        _flushIntervalMs = config.TryGetValue(ICalConnectorConfig.FlushIntervalMsConfig, out var flushInterval)
+            ? int.Parse(flushInterval, CultureInfo.InvariantCulture) : ICalConnectorConfig.DefaultFlushIntervalMs;
 
         if (_outputMode == ICalConnectorConfig.OutputModeFile)
         {
             _currentCalendar = CreateCalendar();
         }
+        else if (_outputMode == ICalConnectorConfig.OutputModeRecord)
+        {
+            // Record mode produces the generated ICS to its own topic; without one the
+            // consumed records would have nowhere to go.
+            if (string.IsNullOrWhiteSpace(_outputTopic))
+            {
+                throw new ArgumentException(
+                    $"Output mode '{ICalConnectorConfig.OutputModeRecord}' requires {ICalConnectorConfig.OutputTopicConfig}",
+                    nameof(config));
+            }
+        }
+        else
+        {
+            throw new ArgumentException(
+                $"Unknown {ICalConnectorConfig.OutputModeConfig} '{_outputMode}'. Valid values: " +
+                $"'{ICalConnectorConfig.OutputModeFile}', '{ICalConnectorConfig.OutputModeRecord}'",
+                nameof(config));
+        }
+
+        _lastFlushUtc = DateTime.UtcNow;
     }
 
     public override void Stop()
@@ -81,37 +111,53 @@ public sealed class ICalSinkTask : SinkTask
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
+        var lastTopic = "events";
+
         foreach (var record in records)
         {
             if (record.Value == null || record.Value.Length == 0)
                 continue;
 
+            lastTopic = record.Topic;
+
+            CalendarEvent evt;
             try
             {
                 var json = Encoding.UTF8.GetString(record.Value);
                 using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
-
-                var evt = CreateEvent(root, record);
-
-                if (_outputMode == ICalConnectorConfig.OutputModeFile)
-                {
-                    _currentCalendar ??= CreateCalendar();
-                    _currentCalendar.Events.Add(evt);
-                    _eventCount++;
-
-                    if (_eventCount >= _maxEventsPerFile)
-                    {
-                        await FlushCalendarAsync(record.Topic, cancellationToken);
-                    }
-                }
-                // Record mode would emit the ICS as the transformed record value
-                // This is handled in FlushAsync
+                evt = CreateEvent(doc.RootElement, record);
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // Skip invalid JSON
+                // Poison record: skip it, but keep it visible instead of dropping it silently.
+                Context?.RaiseError?.Invoke(ex);
+                continue;
             }
+
+            if (_outputMode == ICalConnectorConfig.OutputModeFile)
+            {
+                _currentCalendar ??= CreateCalendar();
+                _currentCalendar.Events.Add(evt);
+                _eventCount++;
+
+                if (_eventCount >= _maxEventsPerFile)
+                {
+                    await FlushCalendarAsync(record.Topic, cancellationToken);
+                }
+            }
+            else
+            {
+                // Record mode: emit the ICS as the transformed record value.
+                await ProduceEventAsync(evt, cancellationToken);
+            }
+        }
+
+        // ical.flush.interval.ms: rotate a partially filled file once it has aged out.
+        if (_outputMode == ICalConnectorConfig.OutputModeFile &&
+            _eventCount > 0 &&
+            DateTime.UtcNow - _lastFlushUtc >= TimeSpan.FromMilliseconds(_flushIntervalMs))
+        {
+            await FlushCalendarAsync(lastTopic, cancellationToken);
         }
     }
 
@@ -123,12 +169,41 @@ public sealed class ICalSinkTask : SinkTask
         }
     }
 
+    private async Task ProduceEventAsync(CalendarEvent evt, CancellationToken cancellationToken)
+    {
+        var producer = Context?.Producer
+            ?? throw new InvalidOperationException(
+                $"Output mode '{ICalConnectorConfig.OutputModeRecord}' emits the ICS to '{_outputTopic}', " +
+                "but the runtime provided no producer.");
+
+        var calendar = CreateCalendar();
+        calendar.Events.Add(evt);
+
+        var key = evt.Uid is { Length: > 0 } uid ? Encoding.UTF8.GetBytes(uid) : null;
+        var value = Encoding.UTF8.GetBytes(SerializeCalendar(calendar));
+
+        await producer.ProduceAsync(_outputTopic, key, value, cancellationToken);
+    }
+
     private Calendar CreateCalendar()
     {
         var calendar = new Calendar();
         calendar.AddProperty("X-WR-CALNAME", _calendarName);
         calendar.ProductId = _calendarProductId;
         return calendar;
+    }
+
+    /// <summary>
+    /// Parses a timestamp for <see cref="CalDateTime"/>, which only accepts Utc or
+    /// Unspecified kinds — a plain TryParse turns a trailing 'Z' into local time.
+    /// </summary>
+    private static bool TryParseCalendarDate(string value, out DateTime result)
+    {
+        return DateTime.TryParse(
+            value,
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AdjustToUniversal | DateTimeStyles.AllowWhiteSpaces,
+            out result);
     }
 
     private CalendarEvent CreateEvent(JsonElement root, SinkRecord record)
@@ -169,7 +244,7 @@ public sealed class ICalSinkTask : SinkTask
 
         // Start time
         if (TryGetString(root, _startField, out var startStr) &&
-            DateTime.TryParse(startStr, out var startDt))
+            TryParseCalendarDate(startStr, out var startDt))
         {
             evt.DtStart = new CalDateTime(startDt);
         }
@@ -180,7 +255,7 @@ public sealed class ICalSinkTask : SinkTask
 
         // End time
         if (TryGetString(root, _endField, out var endStr) &&
-            DateTime.TryParse(endStr, out var endDt))
+            TryParseCalendarDate(endStr, out var endDt))
         {
             evt.DtEnd = new CalDateTime(endDt);
         }
@@ -245,12 +320,8 @@ public sealed class ICalSinkTask : SinkTask
         if (_currentCalendar == null || _currentCalendar.Events.Count == 0)
             return;
 
-        var serializer = new CalendarSerializer();
-        var icsContent = serializer.SerializeToString(_currentCalendar);
-
-        var outputPath = _outputPath
-            .Replace("${topic}", topic)
-            .Replace("${timestamp}", DateTime.UtcNow.ToString("yyyyMMddHHmmss"));
+        var icsContent = SerializeCalendar(_currentCalendar);
+        var outputPath = ResolveOutputPath(topic);
 
         // Ensure directory exists
         var dir = Path.GetDirectoryName(outputPath);
@@ -264,5 +335,42 @@ public sealed class ICalSinkTask : SinkTask
         // Reset for next batch
         _currentCalendar = CreateCalendar();
         _eventCount = 0;
+        _lastFlushUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Resolves the rotation target. A path without a ${timestamp} placeholder - or two
+    /// rotations inside the same second - would resolve to a file that already holds
+    /// flushed events, so the name is uniquified instead of overwriting them.
+    /// </summary>
+    private string ResolveOutputPath(string topic)
+    {
+        var outputPath = _outputPath
+            .Replace("${topic}", topic, StringComparison.Ordinal)
+            .Replace("${timestamp}", DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+
+        if (!File.Exists(outputPath))
+            return outputPath;
+
+        var dir = Path.GetDirectoryName(outputPath);
+        var stem = Path.GetFileNameWithoutExtension(outputPath);
+        var extension = Path.GetExtension(outputPath);
+
+        while (true)
+        {
+            _fileSequence++;
+            var name = $"{stem}-{_fileSequence.ToString(CultureInfo.InvariantCulture)}{extension}";
+            var rotated = string.IsNullOrEmpty(dir) ? name : Path.Combine(dir, name);
+
+            if (!File.Exists(rotated))
+                return rotated;
+        }
+    }
+
+    private static string SerializeCalendar(Calendar calendar)
+    {
+        var serializer = new CalendarSerializer();
+        return serializer.SerializeToString(calendar) ?? string.Empty;
     }
 }

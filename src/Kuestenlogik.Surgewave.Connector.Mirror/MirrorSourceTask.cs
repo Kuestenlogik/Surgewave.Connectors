@@ -1,4 +1,6 @@
+using System.Globalization;
 using Kuestenlogik.Surgewave.Client.Native;
+using Kuestenlogik.Surgewave.Connector.Mirror.Failover;
 using Kuestenlogik.Surgewave.Connector.Mirror.Metrics;
 using Kuestenlogik.Surgewave.Connector.Mirror.Offsets;
 using Kuestenlogik.Surgewave.Connector.Mirror.Policies;
@@ -25,6 +27,9 @@ public sealed class MirrorSourceTask : SourceTask
 
     // Track offsets per topic-partition
     private readonly Dictionary<(string topic, int partition), long> _currentOffsets = [];
+
+    // Stops hammering a source cluster that keeps failing
+    private readonly CircuitBreaker _circuitBreaker = new();
 
     // Configuration
     private int _pollTimeoutMs;
@@ -61,15 +66,63 @@ public sealed class MirrorSourceTask : SourceTask
             _sourceClient = new SurgewaveNativeClient(host, port);
             _sourceClient.ConnectAsync().GetAwaiter().GetResult();
 
-            // Initialize offsets for each topic (starting from 0)
-            foreach (var topic in _topics)
+            InitializeOffsets();
+        }
+    }
+
+    /// <summary>
+    /// Seed the fetch cursor for every partition of every assigned topic, resuming from the
+    /// offset that was committed before the last restart. Without the partition discovery
+    /// every partition but 0 would never be replicated; without the offset restore every
+    /// restart would replicate each topic from the beginning again.
+    /// </summary>
+    private void InitializeOffsets()
+    {
+        foreach (var topic in _topics)
+        {
+            var partitionCount = GetPartitionCount(topic);
+            for (var partition = 0; partition < partitionCount; partition++)
             {
-                // For now, start from partition 0 offset 0
-                // A full implementation would discover all partitions
-                _currentOffsets[(topic, 0)] = 0;
+                _currentOffsets[(topic, partition)] = RestoreOffset(topic, partition);
             }
         }
     }
+
+    private int GetPartitionCount(string topic)
+    {
+        try
+        {
+            var description = _sourceClient!.Topics.DescribeAsync(topic).GetAwaiter().GetResult();
+            return Math.Max(1, description.PartitionCount);
+        }
+        catch (Exception ex)
+        {
+            // Metadata unavailable - keep replicating partition 0 rather than nothing, but make
+            // the degraded discovery visible instead of silently dropping the other partitions.
+            _metrics?.RecordError(topic, ex.GetType().Name);
+            Context?.RaiseError?.Invoke(ex);
+            return 1;
+        }
+    }
+
+    private long RestoreOffset(string topic, int partition)
+    {
+        var storedOffset = Context?.OffsetStorageReader?.Offset(CreateSourcePartition(topic, partition));
+        if (storedOffset != null && storedOffset.TryGetValue("offset", out var value) && value != null)
+        {
+            // The stored value is the offset of the last replicated record - resume after it.
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture) + 1;
+        }
+
+        return 0;
+    }
+
+    private Dictionary<string, object> CreateSourcePartition(string topic, int partition) => new()
+    {
+        ["cluster"] = _sourceClusterAlias,
+        ["topic"] = topic,
+        ["partition"] = partition
+    };
 
     public override void Stop()
     {
@@ -81,6 +134,13 @@ public sealed class MirrorSourceTask : SourceTask
     {
         if (_sourceClient == null || _topics.Count == 0)
             return [];
+
+        if (!_circuitBreaker.AllowRequest())
+        {
+            // Source cluster keeps failing - back off instead of hammering it on every poll.
+            await Task.Delay(Math.Min(100, _pollTimeoutMs), cancellationToken);
+            return [];
+        }
 
         var records = new List<SourceRecord>();
         var startTime = DateTime.UtcNow;
@@ -101,12 +161,7 @@ public sealed class MirrorSourceTask : SourceTask
                     // Create source record
                     var record = new SourceRecord
                     {
-                        SourcePartition = new Dictionary<string, object>
-                        {
-                            ["cluster"] = _sourceClusterAlias,
-                            ["topic"] = topic,
-                            ["partition"] = partition
-                        },
+                        SourcePartition = CreateSourcePartition(topic, partition),
                         SourceOffset = new Dictionary<string, object>
                         {
                             ["offset"] = msg.Offset
@@ -116,7 +171,8 @@ public sealed class MirrorSourceTask : SourceTask
                         Key = msg.Key is { Length: > 0 } ? msg.Key.ToArray() : null,
                         Value = msg.Value?.ToArray() ?? [],
                         Timestamp = DateTimeOffset.FromUnixTimeMilliseconds(msg.Timestamp),
-                        Headers = null // Native protocol doesn't expose headers directly yet
+                        // Replicate headers verbatim - dropping them loses routing/tracing metadata
+                        Headers = msg.Headers is { Count: > 0 } ? new Dictionary<string, byte[]>(msg.Headers) : null
                     };
 
                     records.Add(record);
@@ -138,6 +194,8 @@ public sealed class MirrorSourceTask : SourceTask
             {
                 _metrics?.RecordLatency(_topics[0], latencyMs);
             }
+
+            _circuitBreaker.RecordSuccess();
         }
         catch (OperationCanceledException)
         {
@@ -145,8 +203,9 @@ public sealed class MirrorSourceTask : SourceTask
         }
         catch (Exception ex)
         {
+            _circuitBreaker.RecordFailure();
             _metrics?.RecordError("unknown", ex.GetType().Name);
-            Context.RaiseError(ex);
+            Context?.RaiseError?.Invoke(ex);
         }
 
         // If no records, wait a bit before polling again

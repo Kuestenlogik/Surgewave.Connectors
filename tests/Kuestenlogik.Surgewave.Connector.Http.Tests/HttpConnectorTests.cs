@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using Kuestenlogik.Surgewave.Connect;
 using Kuestenlogik.Surgewave.Plugins.Configuration;
@@ -623,5 +624,135 @@ public sealed class HttpConnectorTests
         // Cleanup
         task.Stop();
         task.Dispose();
+    }
+
+    [Fact]
+    public async Task HttpSinkTask_SkipsTombstoneRecords_InSingleMode()
+    {
+        // Arrange
+        using var task = new HttpSinkTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { } });
+        task.Start(new Dictionary<string, string>
+        {
+            [HttpConnectorConfig.Url] = "http://127.0.0.1:1/sink",
+            [HttpConnectorConfig.BatchMode] = HttpConnectorConfig.BatchModeSingle,
+            [HttpConnectorConfig.RetryMax] = "0"
+        });
+
+        // Act - a tombstone carries no body; it must be skipped instead of throwing
+        // ArgumentNullException (which would fail the whole batch). No HTTP call happens,
+        // so the unreachable URL is never contacted.
+        await task.PutAsync([CreateTombstone()], CancellationToken.None);
+
+        // Assert
+        Assert.Equal("1.0.0", task.Version);
+
+        // Cleanup
+        task.Stop();
+    }
+
+    [Fact]
+    public async Task HttpSinkTask_SkipsTombstoneRecords_InArrayMode()
+    {
+        // Arrange
+        using var task = new HttpSinkTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { } });
+        task.Start(new Dictionary<string, string>
+        {
+            [HttpConnectorConfig.Url] = "http://127.0.0.1:1/sink",
+            [HttpConnectorConfig.BatchMode] = HttpConnectorConfig.BatchModeArray,
+            [HttpConnectorConfig.BatchSize] = "100",
+            [HttpConnectorConfig.RetryMax] = "0"
+        });
+
+        // Act - buffering plus an explicit flush must not blow up on the tombstone;
+        // the resulting batch is empty, so nothing is sent.
+        await task.PutAsync([CreateTombstone()], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        // Assert
+        Assert.Equal("1.0.0", task.Version);
+
+        // Cleanup
+        task.Stop();
+    }
+
+    private static SinkRecord CreateTombstone() => new()
+    {
+        Topic = "http-sink",
+        Partition = 0,
+        Offset = 0,
+        Key = Encoding.UTF8.GetBytes("deleted-key"),
+        Value = null!
+    };
+
+    [Fact]
+    public async Task HttpSourceTask_ReconnectsAfterGracefulSseClose()
+    {
+        // Arrange - a server that answers every request with a short SSE stream and then
+        // closes it gracefully (no fault, no cancellation).
+        var port = 28100 + (Environment.ProcessId % 200);
+        var requestCount = 0;
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://localhost:{port}/events/");
+        listener.Start();
+
+        var serverTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (listener.IsListening)
+                {
+                    var ctx = await listener.GetContextAsync();
+                    Interlocked.Increment(ref requestCount);
+                    ctx.Response.ContentType = HttpConnectorConfig.SseContentType;
+                    ctx.Response.StatusCode = 200;
+                    var body = Encoding.UTF8.GetBytes("id: 1\ndata: hello\n\n");
+                    await ctx.Response.OutputStream.WriteAsync(body);
+                    await ctx.Response.OutputStream.FlushAsync();
+                    ctx.Response.Close();
+                }
+            }
+            catch (HttpListenerException)
+            {
+                // Listener stopped
+            }
+            catch (ObjectDisposedException)
+            {
+                // Listener disposed
+            }
+        });
+
+        using var task = new HttpSourceTask();
+        task.Initialize(new TaskContext { RaiseError = _ => { } });
+        task.Start(new Dictionary<string, string>
+        {
+            [HttpConnectorConfig.Url] = $"http://localhost:{port}/events/",
+            [HttpConnectorConfig.Topic] = "sse-events",
+            [HttpConnectorConfig.PollIntervalMs] = "0",
+            [HttpConnectorConfig.SseReconnectDelayMs] = "1"
+        });
+
+        try
+        {
+            // Act - keep polling; after the stream ends the task must leave SSE mode and
+            // reconnect. Without that, the second request never arrives because the source
+            // keeps returning [] from an exhausted channel.
+            var deadline = DateTime.UtcNow.AddSeconds(8);
+            while (Volatile.Read(ref requestCount) < 2 && DateTime.UtcNow < deadline)
+            {
+                await task.PollAsync(CancellationToken.None);
+            }
+
+            // Assert
+            Assert.True(Volatile.Read(ref requestCount) >= 2,
+                "Source did not reconnect after the SSE stream was closed gracefully.");
+        }
+        finally
+        {
+            task.Stop();
+            listener.Stop();
+            await serverTask;
+        }
     }
 }

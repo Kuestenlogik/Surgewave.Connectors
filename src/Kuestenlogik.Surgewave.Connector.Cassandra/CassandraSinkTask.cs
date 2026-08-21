@@ -29,7 +29,7 @@ public sealed class CassandraSinkTask : SinkTask
     private string[] _clusteringKeyColumns = [];
 
     private readonly List<SinkRecord> _batch = [];
-    private PreparedStatement? _insertStatement;
+    private PreparedStatement? _writeStatement;
     private string[]? _columnNames;
 
     public override void Start(IDictionary<string, string> config)
@@ -49,8 +49,39 @@ public sealed class CassandraSinkTask : SinkTask
         var clusteringKeys = GetConfigValue(config, CassandraConnectorConfig.ClusteringKeyColumnsConfig, "");
         _clusteringKeyColumns = string.IsNullOrEmpty(clusteringKeys) ? [] : clusteringKeys.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        ValidateWriteMode();
+
         (_cluster, _session) = CreateSession(config);
     }
+
+    /// <summary>
+    /// 'insert' writes the record as an INSERT, 'upsert' as an UPDATE of the keyed row.
+    /// Anything else - or an upsert without a key - must fail loudly instead of silently
+    /// falling back to an INSERT.
+    /// </summary>
+    private void ValidateWriteMode()
+    {
+        if (IsUpsertMode)
+        {
+            if (_partitionKeyColumns.Length == 0)
+            {
+                throw new ArgumentException(
+                    $"{CassandraConnectorConfig.WriteModeConfig}='{CassandraConnectorConfig.WriteModeUpsert}' requires " +
+                    $"{CassandraConnectorConfig.PartitionKeyColumnsConfig} to identify the row to update");
+            }
+
+            return;
+        }
+
+        if (!_writeMode.Equals(CassandraConnectorConfig.WriteModeInsert, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unsupported {CassandraConnectorConfig.WriteModeConfig}: '{_writeMode}'. Supported modes: " +
+                $"{CassandraConnectorConfig.WriteModeInsert}, {CassandraConnectorConfig.WriteModeUpsert}");
+        }
+    }
+
+    private bool IsUpsertMode => _writeMode.Equals(CassandraConnectorConfig.WriteModeUpsert, StringComparison.OrdinalIgnoreCase);
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
         => config.TryGetValue(key, out var value) && !string.IsNullOrEmpty(value) ? value : defaultValue;
@@ -195,7 +226,7 @@ public sealed class CassandraSinkTask : SinkTask
 
         foreach (var record in _batch)
         {
-            var statement = await CreateInsertStatementAsync(record);
+            var statement = await CreateWriteStatementAsync(record);
             if (statement != null)
             {
                 batch.Add(statement);
@@ -205,7 +236,7 @@ public sealed class CassandraSinkTask : SinkTask
         await _session.ExecuteAsync(batch);
     }
 
-    private async Task<BoundStatement?> CreateInsertStatementAsync(SinkRecord record)
+    private async Task<BoundStatement?> CreateWriteStatementAsync(SinkRecord record)
     {
         if (record.Value == null)
             return null;
@@ -214,23 +245,63 @@ public sealed class CassandraSinkTask : SinkTask
         if (data == null || data.Count == 0)
             return null;
 
-        // Prepare insert statement if not already done or columns changed
         var columns = data.Keys.ToArray();
-        if (_insertStatement == null || _columnNames == null || !columns.SequenceEqual(_columnNames))
+
+        // Upsert mode updates the row addressed by the primary key; insert mode writes the
+        // whole record. Upsert binds the SET columns first and the key columns last.
+        string[] keyColumns = IsUpsertMode ? [.. _partitionKeyColumns, .. _clusteringKeyColumns] : [];
+        string[] bindOrder;
+
+        if (keyColumns.Length > 0)
         {
-            _columnNames = columns;
-            var columnList = string.Join(", ", columns);
-            var placeholders = string.Join(", ", columns.Select(_ => "?"));
+            var missing = keyColumns.Where(k => !data.ContainsKey(k)).ToArray();
+            if (missing.Length > 0)
+            {
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"Cassandra sink skipped record {record.Topic}[{record.Partition}]@{record.Offset}: value is missing key column(s) {string.Join(", ", missing)}"));
+                return null;
+            }
 
-            var cql = _ttlSeconds > 0
-                ? $"INSERT INTO {_table} ({columnList}) VALUES ({placeholders}) USING TTL {_ttlSeconds}"
-                : $"INSERT INTO {_table} ({columnList}) VALUES ({placeholders})";
+            var setColumns = columns.Where(c => !keyColumns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToArray();
+            if (setColumns.Length == 0)
+            {
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"Cassandra sink skipped record {record.Topic}[{record.Partition}]@{record.Offset}: value has no non-key columns to update"));
+                return null;
+            }
 
-            _insertStatement = await _session!.PrepareAsync(cql);
+            bindOrder = [.. setColumns, .. keyColumns];
+        }
+        else
+        {
+            bindOrder = columns;
         }
 
-        var values = columns.Select(c => ConvertToCassandraValue(data[c])).ToArray();
-        return _insertStatement.Bind(values);
+        // Prepare the statement if not already done or columns changed
+        if (_writeStatement == null || _columnNames == null || !bindOrder.SequenceEqual(_columnNames))
+        {
+            _columnNames = bindOrder;
+            _writeStatement = await _session!.PrepareAsync(BuildWriteCql(bindOrder, keyColumns.Length));
+        }
+
+        var values = bindOrder.Select(c => ConvertToCassandraValue(data[c])).ToArray();
+        return _writeStatement.Bind(values);
+    }
+
+    private string BuildWriteCql(string[] bindOrder, int keyCount)
+    {
+        var ttl = _ttlSeconds > 0 ? $" USING TTL {_ttlSeconds}" : "";
+
+        if (keyCount == 0)
+        {
+            var columnList = string.Join(", ", bindOrder);
+            var placeholders = string.Join(", ", bindOrder.Select(_ => "?"));
+            return $"INSERT INTO {_table} ({columnList}) VALUES ({placeholders}){ttl}";
+        }
+
+        var assignments = string.Join(", ", bindOrder.Take(bindOrder.Length - keyCount).Select(c => $"{c} = ?"));
+        var conditions = string.Join(" AND ", bindOrder.Skip(bindOrder.Length - keyCount).Select(c => $"{c} = ?"));
+        return $"UPDATE {_table}{ttl} SET {assignments} WHERE {conditions}";
     }
 
     private async Task DeleteRecordAsync(SinkRecord record, CancellationToken cancellationToken)
@@ -296,8 +367,11 @@ public sealed class CassandraSinkTask : SinkTask
             var json = Encoding.UTF8.GetString(record.Value);
             return JsonSerializer.Deserialize<Dictionary<string, object?>>(json, JsonSerializerOptions);
         }
-        catch
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
+            // Poison record: skip it, but keep the data loss visible to the runtime.
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Cassandra sink skipped record {record.Topic}[{record.Partition}]@{record.Offset}: value is not a JSON object", ex));
             return null;
         }
     }
@@ -331,8 +405,11 @@ public sealed class CassandraSinkTask : SinkTask
 
             return null;
         }
-        catch
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
         {
+            // Poison key: the delete cannot be built, so make the skip visible.
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Cassandra sink skipped tombstone {record.Topic}[{record.Partition}]@{record.Offset}: key is not parseable", ex));
             return null;
         }
     }

@@ -8,6 +8,12 @@ namespace Kuestenlogik.Surgewave.Connector.Mirror.Failover;
 /// Manages failover operations between source and target clusters.
 /// Handles consumer group offset migration during failover scenarios.
 /// </summary>
+/// <remarks>
+/// This is an operator-driven building block, not part of the replication pipeline: no
+/// connector or task constructs it. Failover is deliberately manual - it needs an explicit
+/// trigger and a target-side offset commit, neither of which the Connect task lifecycle
+/// exposes. Host it from an admin surface and drive it from there.
+/// </remarks>
 public sealed class FailoverManager : IAsyncDisposable
 {
     private readonly string _sourceClusterAlias;

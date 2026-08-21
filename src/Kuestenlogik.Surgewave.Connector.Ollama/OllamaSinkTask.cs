@@ -1,5 +1,6 @@
 namespace Kuestenlogik.Surgewave.Connector.Ollama;
 
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -24,9 +25,13 @@ public sealed class OllamaSinkTask : SinkTask
     private string _inputField = OllamaConnectorConfig.DefaultInputField;
     private string _outputField = OllamaConnectorConfig.DefaultOutputField;
     private string _webhookUrl = "";
+    private string _outputTopic = "";
+    private string _outputFormat = OllamaConnectorConfig.FormatMerge;
     private string _keepAlive = OllamaConnectorConfig.DefaultKeepAlive;
     private bool _includeOriginal = OllamaConnectorConfig.DefaultIncludeOriginal;
     private int _batchSize = OllamaConnectorConfig.DefaultBatchSize;
+    private int _batchTimeoutMs = OllamaConnectorConfig.DefaultBatchTimeoutMs;
+    private DateTime _firstBufferedAtUtc = DateTime.MinValue;
     private int _retryMax = OllamaConnectorConfig.DefaultRetryMax;
     private int _retryBackoffMs = OllamaConnectorConfig.DefaultRetryBackoffMs;
     private readonly List<SinkRecord> _buffer = [];
@@ -41,20 +46,36 @@ public sealed class OllamaSinkTask : SinkTask
         _embeddingsModel = GetConfig(config, OllamaConnectorConfig.EmbeddingsModelConfig, OllamaConnectorConfig.DefaultEmbeddingsModel);
         _completionsModel = GetConfig(config, OllamaConnectorConfig.CompletionsModelConfig, OllamaConnectorConfig.DefaultCompletionsModel);
         _systemPrompt = GetConfig(config, OllamaConnectorConfig.SystemPromptConfig, "");
-        _maxTokens = int.Parse(GetConfig(config, OllamaConnectorConfig.MaxTokensConfig, OllamaConnectorConfig.DefaultMaxTokens.ToString()));
-        _temperature = float.Parse(GetConfig(config, OllamaConnectorConfig.TemperatureConfig, OllamaConnectorConfig.DefaultTemperature.ToString()));
+        _maxTokens = int.Parse(GetConfig(config, OllamaConnectorConfig.MaxTokensConfig, OllamaConnectorConfig.DefaultMaxTokens.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _temperature = float.Parse(GetConfig(config, OllamaConnectorConfig.TemperatureConfig, OllamaConnectorConfig.DefaultTemperature.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
         _inputField = GetConfig(config, OllamaConnectorConfig.InputFieldConfig, OllamaConnectorConfig.DefaultInputField);
         _outputField = GetConfig(config, OllamaConnectorConfig.OutputFieldConfig, OllamaConnectorConfig.DefaultOutputField);
         _webhookUrl = GetConfig(config, OllamaConnectorConfig.WebhookUrlConfig, "");
+        _outputTopic = GetConfig(config, OllamaConnectorConfig.OutputTopicConfig, "");
+        _outputFormat = GetConfig(config, OllamaConnectorConfig.OutputFormatConfig, OllamaConnectorConfig.FormatMerge);
         _keepAlive = GetConfig(config, OllamaConnectorConfig.KeepAliveConfig, OllamaConnectorConfig.DefaultKeepAlive);
         _includeOriginal = bool.Parse(GetConfig(config, OllamaConnectorConfig.IncludeOriginalConfig, OllamaConnectorConfig.DefaultIncludeOriginal.ToString()));
-        _batchSize = int.Parse(GetConfig(config, OllamaConnectorConfig.BatchSizeConfig, OllamaConnectorConfig.DefaultBatchSize.ToString()));
-        _retryMax = int.Parse(GetConfig(config, OllamaConnectorConfig.RetryMaxConfig, OllamaConnectorConfig.DefaultRetryMax.ToString()));
-        _retryBackoffMs = int.Parse(GetConfig(config, OllamaConnectorConfig.RetryBackoffMsConfig, OllamaConnectorConfig.DefaultRetryBackoffMs.ToString()));
+        _batchSize = int.Parse(GetConfig(config, OllamaConnectorConfig.BatchSizeConfig, OllamaConnectorConfig.DefaultBatchSize.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _batchTimeoutMs = int.Parse(GetConfig(config, OllamaConnectorConfig.BatchTimeoutMsConfig, OllamaConnectorConfig.DefaultBatchTimeoutMs.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _retryMax = int.Parse(GetConfig(config, OllamaConnectorConfig.RetryMaxConfig, OllamaConnectorConfig.DefaultRetryMax.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+        _retryBackoffMs = int.Parse(GetConfig(config, OllamaConnectorConfig.RetryBackoffMsConfig, OllamaConnectorConfig.DefaultRetryBackoffMs.ToString(CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
+
+        if (_outputFormat is not (OllamaConnectorConfig.FormatJson or OllamaConnectorConfig.FormatMerge))
+        {
+            throw new ArgumentException(
+                $"Invalid '{OllamaConnectorConfig.OutputFormatConfig}' value '{_outputFormat}'. Must be '{OllamaConnectorConfig.FormatJson}' or '{OllamaConnectorConfig.FormatMerge}'.",
+                nameof(config));
+        }
+
+        if (!string.IsNullOrEmpty(_outputTopic) && Context?.Producer == null)
+        {
+            throw new InvalidOperationException(
+                $"'{OllamaConnectorConfig.OutputTopicConfig}' is configured but this task context provides no producer to write results with.");
+        }
 
         _client = new OllamaApiClient(new Uri(baseUrl));
 
-        if (!string.IsNullOrEmpty(_webhookUrl))
+        if (string.IsNullOrEmpty(_outputTopic) && !string.IsNullOrEmpty(_webhookUrl))
         {
             _webhookClient = new HttpClient();
         }
@@ -65,13 +86,24 @@ public sealed class OllamaSinkTask : SinkTask
         if (records.Count == 0)
             return;
 
+        if (_buffer.Count == 0)
+            _firstBufferedAtUtc = DateTime.UtcNow;
+
         _buffer.AddRange(records);
 
-        if (_buffer.Count >= _batchSize)
+        if (_buffer.Count >= _batchSize || BatchTimeoutElapsed())
         {
             await FlushBufferAsync(cancellationToken);
         }
     }
+
+    /// <summary>
+    /// True once the oldest buffered record has been waiting longer than <c>batch.timeout.ms</c>.
+    /// </summary>
+    private bool BatchTimeoutElapsed()
+        => _batchTimeoutMs > 0
+           && _buffer.Count > 0
+           && (DateTime.UtcNow - _firstBufferedAtUtc).TotalMilliseconds >= _batchTimeoutMs;
 
     public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
     {
@@ -85,6 +117,7 @@ public sealed class OllamaSinkTask : SinkTask
     {
         var batch = _buffer.ToList();
         _buffer.Clear();
+        _firstBufferedAtUtc = DateTime.MinValue;
 
         if (_mode == OllamaConnectorConfig.ModeEmbeddings)
         {
@@ -118,7 +151,10 @@ public sealed class OllamaSinkTask : SinkTask
             }
 
             if (string.IsNullOrEmpty(inputText))
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call Ollama embeddings API with retry
             float[]? embedding = null;
@@ -175,7 +211,10 @@ public sealed class OllamaSinkTask : SinkTask
             }
 
             if (string.IsNullOrEmpty(inputText))
+            {
+                RaisePoisonRecord(record);
                 continue;
+            }
 
             // Call Ollama chat API with retry
             string? completion = null;
@@ -231,41 +270,53 @@ public sealed class OllamaSinkTask : SinkTask
         }
     }
 
+    private void RaisePoisonRecord(SinkRecord record)
+        => Context?.RaiseError?.Invoke(new InvalidOperationException(FormattableString.Invariant(
+            $"Skipping record {record.Topic}:{record.Partition}:{record.Offset}: field '{_inputField}' is missing or empty")));
+
     private JsonNode CreateOutputJson(JsonNode? original, object result, string rawValue)
     {
-        if (original != null)
+        // 'merge' folds the result into the incoming document, 'json' always emits a new one
+        if (original != null && _outputFormat == OllamaConnectorConfig.FormatMerge)
         {
-            // Merge result into original
             original[_outputField] = JsonValue.Create(result);
             return original;
         }
-        else
+
+        var output = new JsonObject
         {
-            // Create new document
-            var output = new JsonObject
-            {
-                [_outputField] = JsonValue.Create(result)
-            };
+            [_outputField] = JsonValue.Create(result)
+        };
 
-            if (_includeOriginal)
+        if (_includeOriginal)
+        {
+            try
             {
-                try
-                {
-                    output["original"] = JsonNode.Parse(rawValue);
-                }
-                catch (JsonException)
-                {
-                    output["original"] = rawValue;
-                }
+                output["original"] = JsonNode.Parse(rawValue);
             }
-
-            return output;
+            catch (JsonException)
+            {
+                output["original"] = rawValue;
+            }
         }
+
+        return output;
     }
 
     private async Task SendOutputAsync(JsonNode output, SinkRecord sourceRecord, CancellationToken cancellationToken)
     {
         var json = output.ToJsonString();
+
+        // Produce back to a Surgewave topic if configured
+        if (!string.IsNullOrEmpty(_outputTopic))
+        {
+            var producer = Context?.Producer
+                ?? throw new InvalidOperationException(
+                    $"'{OllamaConnectorConfig.OutputTopicConfig}' is configured but this task context provides no producer to write results with.");
+
+            await producer.ProduceAsync(_outputTopic, sourceRecord.Key, Encoding.UTF8.GetBytes(json), cancellationToken);
+            return;
+        }
 
         // Send to webhook if configured
         if (_webhookClient != null && !string.IsNullOrEmpty(_webhookUrl))
@@ -273,24 +324,33 @@ public sealed class OllamaSinkTask : SinkTask
             try
             {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
-                await _webhookClient.PostAsync(new Uri(_webhookUrl), content, cancellationToken);
+                using var response = await _webhookClient.PostAsync(new Uri(_webhookUrl), content, cancellationToken);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new HttpRequestException(FormattableString.Invariant(
+                        $"Webhook {_webhookUrl} rejected the result for {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} with status {(int)response.StatusCode}"));
+                }
             }
-            catch (HttpRequestException)
+            catch (HttpRequestException ex)
             {
-                // Log error but don't fail the task
-                Context?.RaiseError?.Invoke(new Exception($"Failed to send to webhook: {_webhookUrl}"));
+                // Surface, then fail the batch so the worker can retry or route to the DLQ
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
+
+            return;
         }
-        else
-        {
-            // Default: log to console for debugging
-            Console.WriteLine($"[Ollama] {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} -> {json[..Math.Min(200, json.Length)]}...");
-        }
+
+        // No delivery target configured: log to console for debugging
+        Console.WriteLine($"[Ollama] {sourceRecord.Topic}:{sourceRecord.Partition}:{sourceRecord.Offset} -> {json[..Math.Min(200, json.Length)]}...");
     }
 
     public override void Stop()
     {
         _buffer.Clear();
+        _firstBufferedAtUtc = DateTime.MinValue;
+        _client?.Dispose();
         _client = null;
         _webhookClient?.Dispose();
         _webhookClient = null;

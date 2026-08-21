@@ -6,7 +6,7 @@ namespace Kuestenlogik.Surgewave.Connector.Weather;
 public static class WeatherConnectorConfig
 {
     // Provider selection
-    public const string Provider = "weather.provider";  // openweathermap, open-meteo, nws
+    public const string Provider = "weather.provider";  // openweathermap, open-meteo
 
     // OpenWeatherMap settings
     public const string ApiKey = "weather.api.key";
@@ -21,7 +21,7 @@ public static class WeatherConnectorConfig
 
     // Polling settings
     public const string PollIntervalMs = "poll.interval.ms";
-    public const string DataTypes = "weather.data.types";  // current, forecast, alerts, all
+    public const string DataTypes = "weather.data.types";  // current, forecast, all
 
     // Forecast settings
     public const string ForecastDays = "weather.forecast.days";
@@ -35,4 +35,37 @@ public static class WeatherConnectorConfig
     public const string DefaultDataTypes = "current";
     public const int DefaultPollIntervalMs = 300000; // 5 minutes
     public const int DefaultForecastDays = 5;
+
+    // Implemented values - anything else is rejected at startup instead of silently ignored
+    public const string SupportedProviders = "openweathermap, open-meteo";
+    public const string SupportedDataTypes = "current, forecast, all";
+
+    /// <summary>
+    /// Throws when the configured provider is not implemented by this connector.
+    /// </summary>
+    public static void ValidateProvider(string provider)
+    {
+        if (provider is not ("openweathermap" or "open-meteo"))
+        {
+            throw new ArgumentException(
+                $"'{Provider}' value '{provider}' is not supported. Supported providers: {SupportedProviders}",
+                nameof(provider));
+        }
+    }
+
+    /// <summary>
+    /// Throws when the configured data types contain an entry that is not implemented.
+    /// </summary>
+    public static void ValidateDataTypes(string dataTypes)
+    {
+        foreach (var dataType in dataTypes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (dataType is not ("current" or "forecast" or "all"))
+            {
+                throw new ArgumentException(
+                    $"'{DataTypes}' value '{dataType}' is not supported. Supported data types: {SupportedDataTypes}",
+                    nameof(dataTypes));
+            }
+        }
+    }
 }

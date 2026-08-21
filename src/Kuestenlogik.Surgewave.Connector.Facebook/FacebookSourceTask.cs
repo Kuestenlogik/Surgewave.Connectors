@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -19,18 +20,24 @@ public sealed class FacebookSourceTask : SourceTask
         WriteIndented = false
     };
 
+    private const string SignaturePrefix = "sha256=";
+    private static readonly TimeSpan EnqueueTimeout = TimeSpan.FromSeconds(10);
+
     private HttpListener? _listener;
     private string _topic = string.Empty;
     private string _verifyToken = string.Empty;
     private string _pageId = string.Empty;
+    private byte[]? _appSecret;
     private long _messageId;
     private CancellationTokenSource? _cts;
     private Task? _listenerTask;
 
+    // Wait (not DropOldest): a delivery is only acknowledged once it is queued, so a
+    // backlog turns into backpressure instead of silently discarded events.
     private readonly Channel<FacebookWebhookPayload> _eventChannel = Channel.CreateBounded<FacebookWebhookPayload>(
         new BoundedChannelOptions(1000)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false
         });
@@ -42,6 +49,9 @@ public sealed class FacebookSourceTask : SourceTask
         _topic = config[FacebookConnectorConfig.Topic];
         _verifyToken = config[FacebookConnectorConfig.WebhookVerifyToken];
         _pageId = config[FacebookConnectorConfig.PageId];
+        _appSecret = config.TryGetValue(FacebookConnectorConfig.AppSecret, out var appSecret) && !string.IsNullOrEmpty(appSecret)
+            ? Encoding.UTF8.GetBytes(appSecret)
+            : null;
 
         var port = config.TryGetValue(FacebookConnectorConfig.WebhookPort, out var p)
             ? int.Parse(p) : FacebookConnectorConfig.DefaultWebhookPort;
@@ -99,13 +109,35 @@ public sealed class FacebookSourceTask : SourceTask
             }
             else if (context.Request.HttpMethod == "POST")
             {
-                using var reader = new StreamReader(context.Request.InputStream);
-                var body = await reader.ReadToEndAsync();
-                var payload = JsonSerializer.Deserialize<FacebookWebhookPayload>(body, JsonOptions);
+                using var buffer = new MemoryStream();
+                await context.Request.InputStream.CopyToAsync(buffer);
+                var body = buffer.ToArray();
 
-                if (payload != null)
+                if (!IsSignatureValid(context.Request, body))
                 {
-                    await _eventChannel.Writer.WriteAsync(payload);
+                    // Unsigned or forged delivery - refuse it instead of injecting fake events
+                    context.Response.StatusCode = 403;
+                    return;
+                }
+
+                FacebookWebhookPayload? payload;
+                try
+                {
+                    payload = JsonSerializer.Deserialize<FacebookWebhookPayload>(body, JsonOptions);
+                }
+                catch (JsonException ex)
+                {
+                    Context?.RaiseError?.Invoke(ex);
+                    context.Response.StatusCode = 400;
+                    return;
+                }
+
+                if (payload != null && !await TryEnqueueAsync(payload))
+                {
+                    // Backlog: do not acknowledge, so Facebook redelivers instead of the
+                    // event being dropped on the floor.
+                    context.Response.StatusCode = 503;
+                    return;
                 }
 
                 context.Response.StatusCode = 200;
@@ -115,10 +147,62 @@ public sealed class FacebookSourceTask : SourceTask
                 context.Response.StatusCode = 405;
             }
         }
+        catch (Exception ex)
+        {
+            // The handler runs detached from the listener loop; surface the failure
+            // instead of losing it in an unobserved task.
+            Context?.RaiseError?.Invoke(ex);
+        }
         finally
         {
             context.Response.Close();
         }
+    }
+
+    private bool IsSignatureValid(HttpListenerRequest request, byte[] body)
+    {
+        // Signature verification is opt-in: without an app secret there is nothing to verify against.
+        var secret = _appSecret;
+        if (secret == null) return true;
+
+        var header = request.Headers[FacebookConnectorConfig.SignatureHeader];
+        if (string.IsNullOrEmpty(header) || !header.StartsWith(SignaturePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        byte[] provided;
+        try
+        {
+            provided = Convert.FromHexString(header[SignaturePrefix.Length..]);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        var expected = HMACSHA256.HashData(secret, body);
+        return CryptographicOperations.FixedTimeEquals(provided, expected);
+    }
+
+    private async Task<bool> TryEnqueueAsync(FacebookWebhookPayload payload)
+    {
+        if (_eventChannel.Writer.TryWrite(payload)) return true;
+
+        using var cts = new CancellationTokenSource(EnqueueTimeout);
+        try
+        {
+            while (await _eventChannel.Writer.WaitToWriteAsync(cts.Token))
+            {
+                if (_eventChannel.Writer.TryWrite(payload)) return true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Consumer is not draining fast enough - let the caller answer 503
+        }
+
+        return false;
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

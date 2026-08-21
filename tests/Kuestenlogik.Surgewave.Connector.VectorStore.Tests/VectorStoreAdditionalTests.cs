@@ -541,4 +541,113 @@ public sealed class VectorStoreAdditionalTests : IDisposable
         var json = Encoding.UTF8.GetString(results[0].Value!);
         Assert.Contains("\"results\":[]", json);
     }
+
+    [Fact]
+    public async Task SourceTask_PollAsync_FailsLoudlyInsteadOfIdling()
+    {
+        var collectionName = "poll-unsupported";
+        VectorStoreRegistry.GetOrCreate(collectionName);
+
+        Exception? raised = null;
+        var task = new VectorStoreSourceTask();
+        task.Initialize(new TaskContext { RaiseError = ex => raised = ex });
+        task.Start(new Dictionary<string, string>
+        {
+            [VectorStoreSourceConnector.CollectionNameConfig] = collectionName,
+            [VectorStoreSourceConnector.TopicConfig] = "results",
+            [VectorStoreSourceConnector.QueryTopicConfig] = "queries"
+        });
+
+        var error = await Assert.ThrowsAsync<NotSupportedException>(
+            () => task.PollAsync(CancellationToken.None));
+
+        // The message has to name the query topic that cannot be consumed, and the failure
+        // must reach the worker instead of being swallowed by an empty poll.
+        Assert.Contains("queries", error.Message, StringComparison.Ordinal);
+        Assert.Same(error, raised);
+    }
+
+    // ── Persistence topic round-trip ──
+
+    [Fact]
+    public async Task SinkTask_FlushSnapshot_CanBeReplayedIntoACollection()
+    {
+        var producer = new CapturingProducer();
+        var task = new VectorStoreSinkTask();
+        task.Initialize(new TaskContext { Producer = producer });
+        task.Start(new Dictionary<string, string>
+        {
+            [VectorStoreSinkConnector.CollectionNameConfig] = "snapshot-source-col",
+            [VectorStoreSinkConnector.PersistenceTopicConfig] = "vector-snapshots"
+        });
+
+        var json = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            id = "doc-1",
+            embedding = new[] { 1.0f, 0.0f },
+            content = "Persisted document"
+        });
+
+        await task.PutAsync([new SinkRecord
+        {
+            Topic = "vectors", Partition = 0, Offset = 0,
+            Value = json
+        }], CancellationToken.None);
+
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        var snapshot = Assert.Single(producer.Produced);
+        Assert.Equal("vector-snapshots", snapshot.Topic);
+
+        // The snapshot is written in the shape the sink reads, so replaying it through a second
+        // instance rebuilds the collection - that is the only restore path there is.
+        var restored = VectorStoreRegistry.GetOrCreate("snapshot-restore-col");
+        var restoreTask = new VectorStoreSinkTask();
+        restoreTask.Initialize(new TaskContext());
+        restoreTask.Start(new Dictionary<string, string>
+        {
+            [VectorStoreSinkConnector.CollectionNameConfig] = "snapshot-restore-col"
+        });
+
+        await restoreTask.PutAsync([new SinkRecord
+        {
+            Topic = "vector-snapshots", Partition = 0, Offset = 0,
+            Key = snapshot.Key,
+            Value = snapshot.Value
+        }], CancellationToken.None);
+
+        Assert.Equal(1, restored.Count);
+        Assert.True(restored.TryGet("doc-1", out var entry));
+        Assert.Equal("Persisted document", entry!.Content);
+    }
+
+    [Fact]
+    public void SinkConnector_Start_RejectsPersistenceTopicThatIsAlsoConsumed()
+    {
+        using var connector = new VectorStoreSinkConnector();
+        connector.Initialize(new ConnectorContext { RequestTaskReconfiguration = () => { }, RaiseError = _ => { } });
+
+        var config = new Dictionary<string, string>
+        {
+            [VectorStoreSinkConnector.CollectionNameConfig] = "loop-col",
+            [VectorStoreSinkConnector.TopicsConfig] = "vectors, vector-snapshots",
+            [VectorStoreSinkConnector.PersistenceTopicConfig] = "vector-snapshots"
+        };
+
+        Assert.Throws<ArgumentException>(() => connector.Start(config));
+    }
+
+    private sealed class CapturingProducer : IConnectProducer
+    {
+        public List<(string Topic, byte[]? Key, byte[] Value)> Produced { get; } = [];
+
+        public Task ProduceAsync(string topic, byte[]? key, byte[] value, CancellationToken cancellationToken = default)
+        {
+            Produced.Add((topic, key, value));
+            return Task.CompletedTask;
+        }
+
+        public Task ProduceAsync(string topic, byte[]? key, byte[] value, IDictionary<string, byte[]>? headers, CancellationToken cancellationToken = default)
+            => ProduceAsync(topic, key, value, cancellationToken);
+    }
 }

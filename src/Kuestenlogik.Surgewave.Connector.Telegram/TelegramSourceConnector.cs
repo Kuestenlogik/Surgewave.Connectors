@@ -8,7 +8,7 @@ namespace Kuestenlogik.Surgewave.Connector.Telegram;
 /// </summary>
 [ConnectorMetadata(
     Name = "telegram-source",
-    Description = "Receives messages from Telegram via Bot API polling or webhook",
+    Description = "Receives messages from Telegram via Bot API long polling",
     Author = "Surgewave",
     Tags = "telegram, chat, messaging, source, bot")]
 public sealed class TelegramSourceConnector : SourceConnector
@@ -33,7 +33,7 @@ public sealed class TelegramSourceConnector : SourceConnector
         .Define(TelegramConnectorConfig.MessageTypes, ConfigType.String, TelegramConnectorConfig.DefaultMessageTypes,
             Importance.Medium, "Message types: text, photo, video, document, all")
         .Define(TelegramConnectorConfig.PollingMode, ConfigType.String, TelegramConnectorConfig.DefaultPollingMode,
-            Importance.Medium, "Polling mode: long-polling, webhook");
+            Importance.Medium, "Polling mode: long-polling (webhook delivery is not implemented)");
 
     public override Type TaskClass => typeof(TelegramSourceTask);
 
@@ -51,6 +51,19 @@ public sealed class TelegramSourceConnector : SourceConnector
             string.IsNullOrWhiteSpace(topic))
         {
             throw new ArgumentException($"'{TelegramConnectorConfig.Topic}' is required");
+        }
+
+        // Only long polling is implemented; fail loudly instead of silently long-polling anyway.
+        var pollingMode = config.TryGetValue(TelegramConnectorConfig.PollingMode, out var mode) &&
+                          !string.IsNullOrWhiteSpace(mode)
+            ? mode
+            : TelegramConnectorConfig.DefaultPollingMode;
+
+        if (!string.Equals(pollingMode, TelegramConnectorConfig.PollingModeLongPolling, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"'{TelegramConnectorConfig.PollingMode}' only supports " +
+                $"'{TelegramConnectorConfig.PollingModeLongPolling}', got '{pollingMode}'");
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using InfluxDB.Client;
@@ -229,7 +230,7 @@ public sealed class InfluxDBSinkTask : SinkTask
         };
     }
 
-    private static DateTime? ParseTimestamp(object value)
+    internal DateTime? ParseTimestamp(object value)
     {
         if (value is DateTime dt)
             return dt;
@@ -237,21 +238,52 @@ public sealed class InfluxDBSinkTask : SinkTask
         if (value is DateTimeOffset dto)
             return dto.UtcDateTime;
 
-        if (value is long ticks)
-            return DateTime.FromFileTimeUtc(ticks);
+        if (value is long epoch)
+            return FromUnixTimestamp(epoch);
 
-        if (value is string s && DateTime.TryParse(s, out var parsed))
-            return parsed.ToUniversalTime();
+        if (value is int epoch32)
+            return FromUnixTimestamp(epoch32);
+
+        if (value is string s && DateTime.TryParse(s, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var parsed))
+            return parsed;
 
         if (value is JsonElement je)
         {
-            if (je.ValueKind == JsonValueKind.String && DateTime.TryParse(je.GetString(), out var jeParsed))
-                return jeParsed.ToUniversalTime();
-            if (je.ValueKind == JsonValueKind.Number && je.TryGetInt64(out var jeTicks))
-                return DateTime.FromFileTimeUtc(jeTicks);
+            if (je.ValueKind == JsonValueKind.String && DateTime.TryParse(je.GetString(), CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var jeParsed))
+                return jeParsed;
+            if (je.ValueKind == JsonValueKind.Number && je.TryGetInt64(out var jeEpoch))
+                return FromUnixTimestamp(jeEpoch);
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// A numeric timestamp field is a Unix epoch value in the configured write precision -
+    /// never a Windows FILETIME, which would land such values in the year 1601.
+    /// </summary>
+    private DateTime? FromUnixTimestamp(long value)
+    {
+        try
+        {
+            return _precision switch
+            {
+                WritePrecision.S => DateTimeOffset.FromUnixTimeSeconds(value).UtcDateTime,
+                WritePrecision.Ms => DateTimeOffset.FromUnixTimeMilliseconds(value).UtcDateTime,
+                WritePrecision.Us => DateTime.UnixEpoch.AddTicks(checked(value * TimeSpan.TicksPerMicrosecond)),
+                _ => DateTime.UnixEpoch.AddTicks(value / TimeSpan.NanosecondsPerTick)
+            };
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+        catch (OverflowException)
+        {
+            return null;
+        }
     }
 
     private Dictionary<string, object?>? ParseRecordValue(SinkRecord record)

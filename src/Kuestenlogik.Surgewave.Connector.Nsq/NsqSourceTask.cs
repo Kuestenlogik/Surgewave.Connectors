@@ -1,7 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Threading.Channels;
 using NsqSharp;
+using NsqSharp.Utils;
 using Kuestenlogik.Surgewave.Connect;
 
 namespace Kuestenlogik.Surgewave.Connector.Nsq;
@@ -71,6 +73,17 @@ public sealed class NsqSourceTask : SourceTask, IHandler
             nsqConfig.AuthSecret = authSecret;
         }
 
+        // Configure TLS if enabled (nsqd negotiates TLS during IDENTIFY)
+        if (config.TryGetValue(NsqConnectorConfig.TlsEnabled, out var tlsEnabled) &&
+            bool.TryParse(tlsEnabled, out var useTls) && useTls)
+        {
+            nsqConfig.TlsConfig = new TlsConfig
+            {
+                InsecureSkipVerify = config.TryGetValue(NsqConnectorConfig.TlsInsecureSkipVerify, out var skipVerify)
+                    && bool.TryParse(skipVerify, out var skip) && skip
+            };
+        }
+
         _consumer = new Consumer(_nsqTopic, _nsqChannel, nsqConfig);
         _consumer.AddHandler(this);
 
@@ -91,17 +104,43 @@ public sealed class NsqSourceTask : SourceTask, IHandler
     /// </summary>
     public void HandleMessage(IMessage message)
     {
-        // Queue the message for processing by PollAsync
-        // This blocks if the channel is full, applying backpressure
-        _messageChannel.Writer.TryWrite(message);
+        // The message is only acknowledged in CommitAsync, once it has been produced -
+        // not when this handler returns.
+        message.DisableAutoResponse();
+
+        try
+        {
+            // Queue the message for processing by PollAsync. This blocks the NSQ handler
+            // thread while the channel is full, which is the backpressure NSQ expects;
+            // dropping the message here would lose it once it ran out of attempts.
+            _messageChannel.Writer.WriteAsync(message, _cts?.Token ?? CancellationToken.None)
+                .AsTask().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutting down - hand the message back to NSQ instead of dropping it.
+            RequeueQuietly(message);
+        }
+        catch (Exception ex)
+        {
+            Context?.RaiseError?.Invoke(ex);
+            RequeueQuietly(message);
+        }
     }
 
     /// <summary>
-    /// Called to log messages from NSQ client.
+    /// Called by NSQ when a message exhausted nsq.max.attempts and is being discarded.
     /// </summary>
     public void LogFailedMessage(IMessage message)
     {
-        // Message reached max attempts - could log or handle specially
+        Context?.RaiseError?.Invoke(new InvalidOperationException(
+            $"NSQ message '{message.Id}' on topic '{_nsqTopic}' was given up on after " +
+            $"{message.Attempts.ToString(CultureInfo.InvariantCulture)} attempts"));
+    }
+
+    private void RequeueQuietly(IMessage message)
+    {
+        try { message.Requeue(TimeSpan.FromMilliseconds(_requeueDelayMs)); } catch { /* ignore */ }
     }
 
     public override void Stop()
@@ -111,7 +150,7 @@ public sealed class NsqSourceTask : SourceTask, IHandler
         // Finish any pending messages by requeuing them
         foreach (var msg in _pendingMessages)
         {
-            try { msg.Requeue(TimeSpan.FromMilliseconds(_requeueDelayMs)); } catch { /* ignore */ }
+            RequeueQuietly(msg);
         }
         _pendingMessages.Clear();
 

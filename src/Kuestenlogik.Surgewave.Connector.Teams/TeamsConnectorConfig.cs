@@ -27,6 +27,13 @@ public static class TeamsConnectorConfig
     public const string WebhookSecret = "webhook.secret";
     public const string IncludeReplies = "include.replies";
 
+    // Source partition / offset keys
+    public const string PartitionTeamId = "teamId";
+    public const string PartitionChannelId = "channelId";
+    public const string OffsetCursor = "cursor";
+    public const string OffsetMessageId = "messageId";
+    public const string OffsetParentMessageId = "parentMessageId";
+
     // Message format values
     public const string FormatText = "text";
     public const string FormatHtml = "html";

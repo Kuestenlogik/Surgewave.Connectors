@@ -14,6 +14,9 @@ using Kuestenlogik.Surgewave.Connect;
 /// </summary>
 public sealed class ComprehendSinkTask : SinkTask
 {
+    /// <summary>Hard limit of documents Amazon Comprehend accepts per BatchDetect* request.</summary>
+    private const int MaxDocumentsPerRequest = 25;
+
     private AmazonComprehendClient? _client;
     private string _mode = ComprehendConnectorConfig.ModeSentiment;
     private string _language = ComprehendConnectorConfig.DefaultLanguage;
@@ -54,7 +57,7 @@ public sealed class ComprehendSinkTask : SinkTask
 
         // Read batching config
         _batchSize = config.TryGetValue(ComprehendConnectorConfig.BatchSizeConfig, out var batchSize) && int.TryParse(batchSize, out var bs)
-            ? Math.Min(bs, 25) // AWS Comprehend batch limit
+            ? Math.Min(bs, MaxDocumentsPerRequest) // AWS Comprehend batch limit
             : ComprehendConnectorConfig.DefaultBatchSize;
 
         _batchTimeoutMs = config.TryGetValue(ComprehendConnectorConfig.BatchTimeoutMsConfig, out var batchTimeout) && int.TryParse(batchTimeout, out var bt)
@@ -123,7 +126,15 @@ public sealed class ComprehendSinkTask : SinkTask
         // Flush any remaining records
         if (_buffer.Count > 0)
         {
-            FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            try
+            {
+                FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                // Shutdown must still release the AWS/HTTP clients; surface the loss instead of hiding it.
+                Context?.RaiseError?.Invoke(ex);
+            }
         }
 
         _client?.Dispose();
@@ -143,6 +154,13 @@ public sealed class ComprehendSinkTask : SinkTask
         }
     }
 
+    public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the buffer before the runtime commits consumer offsets so a crash
+        // cannot lose records that were already acknowledged.
+        return FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _client == null) return;
@@ -151,20 +169,25 @@ public sealed class ComprehendSinkTask : SinkTask
         _buffer.Clear();
         _lastFlush = DateTime.UtcNow;
 
-        // Process records based on mode
-        if (_mode == ComprehendConnectorConfig.ModeLanguage)
+        // Comprehend rejects BatchDetect* requests carrying more than 25 documents, so a
+        // single PutAsync with a larger batch is split into API-sized chunks.
+        foreach (var chunk in recordsToProcess.Chunk(MaxDocumentsPerRequest))
         {
-            // Language detection doesn't require pre-specified language
-            await ProcessLanguageDetectionAsync(recordsToProcess, cancellationToken);
-        }
-        else
-        {
-            // Other modes process with batch APIs
-            await ProcessBatchAsync(recordsToProcess, cancellationToken);
+            // Process records based on mode
+            if (_mode == ComprehendConnectorConfig.ModeLanguage)
+            {
+                // Language detection doesn't require pre-specified language
+                await ProcessLanguageDetectionAsync(chunk, cancellationToken);
+            }
+            else
+            {
+                // Other modes process with batch APIs
+                await ProcessBatchAsync(chunk, cancellationToken);
+            }
         }
     }
 
-    private async Task ProcessLanguageDetectionAsync(List<SinkRecord> records, CancellationToken cancellationToken)
+    private async Task ProcessLanguageDetectionAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
         if (_client == null) return;
 
@@ -206,6 +229,8 @@ public sealed class ComprehendSinkTask : SinkTask
 
             if (response == null) return;
 
+            ReportDocumentErrors(response.ErrorList, ComprehendConnectorConfig.ModeLanguage);
+
             for (var i = 0; i < response.ResultList.Count; i++)
             {
                 var result = response.ResultList[i];
@@ -229,11 +254,14 @@ public sealed class ComprehendSinkTask : SinkTask
         }
         catch (Exception ex)
         {
-            Context.RaiseError?.Invoke(ex);
+            // Surface the failure and let it propagate: the worker must retry or DLQ the
+            // batch instead of committing offsets for records that were never delivered.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
     }
 
-    private async Task ProcessBatchAsync(List<SinkRecord> records, CancellationToken cancellationToken)
+    private async Task ProcessBatchAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
         if (_client == null) return;
 
@@ -288,7 +316,7 @@ public sealed class ComprehendSinkTask : SinkTask
                 await ProcessSyntaxAsync(texts, results, cancellationToken);
             }
 
-            // Output results
+            // Output results (documents Comprehend rejected were removed from the map)
             foreach (var kvp in recordMap)
             {
                 if (results.TryGetValue(kvp.Key, out var analysis))
@@ -300,7 +328,27 @@ public sealed class ComprehendSinkTask : SinkTask
         }
         catch (Exception ex)
         {
-            Context.RaiseError?.Invoke(ex);
+            // Surface the failure and let it propagate: the worker must retry or DLQ the
+            // batch instead of committing offsets for records that were never delivered.
+            Context?.RaiseError?.Invoke(ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reports per-document failures returned in a BatchDetect* ErrorList and drops the
+    /// affected documents so a failed analysis is never emitted as an empty result.
+    /// </summary>
+    private void ReportDocumentErrors(List<BatchItemError>? errors, string operation, Dictionary<int, JsonObject>? results = null)
+    {
+        if (errors == null || errors.Count == 0) return;
+
+        foreach (var error in errors)
+        {
+            var index = error.Index.GetValueOrDefault();
+            results?.Remove(index);
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Comprehend {operation} failed for document {index}: {error.ErrorCode} {error.ErrorMessage}"));
         }
     }
 
@@ -329,6 +377,8 @@ public sealed class ComprehendSinkTask : SinkTask
         }
 
         if (response == null) return;
+
+        ReportDocumentErrors(response.ErrorList, ComprehendConnectorConfig.ModeSentiment, results);
 
         foreach (var result in response.ResultList)
         {
@@ -371,6 +421,8 @@ public sealed class ComprehendSinkTask : SinkTask
         }
 
         if (response == null) return;
+
+        ReportDocumentErrors(response.ErrorList, ComprehendConnectorConfig.ModeEntities, results);
 
         foreach (var result in response.ResultList)
         {
@@ -418,6 +470,8 @@ public sealed class ComprehendSinkTask : SinkTask
         }
 
         if (response == null) return;
+
+        ReportDocumentErrors(response.ErrorList, ComprehendConnectorConfig.ModeKeyPhrases, results);
 
         foreach (var result in response.ResultList)
         {
@@ -510,6 +564,8 @@ public sealed class ComprehendSinkTask : SinkTask
         }
 
         if (response == null) return;
+
+        ReportDocumentErrors(response.ErrorList, ComprehendConnectorConfig.ModeSyntax, results);
 
         foreach (var result in response.ResultList)
         {
@@ -613,15 +669,21 @@ public sealed class ComprehendSinkTask : SinkTask
 
     private async Task OutputResultAsync(JsonObject output, CancellationToken cancellationToken)
     {
-        var json = output.ToJsonString();
-
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            using var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                // A rejected POST is not a delivery - fail the batch so the worker retries or DLQs it.
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new HttpRequestException(
+                    $"Comprehend webhook POST failed with status {(int)response.StatusCode} {response.ReasonPhrase}: {body}");
+            }
         }
         else
         {
-            Console.WriteLine(json);
+            // No webhook configured: results go to stdout, as documented on 'webhook.url'.
+            Console.WriteLine(output.ToJsonString());
         }
     }
 

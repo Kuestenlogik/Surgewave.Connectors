@@ -106,22 +106,52 @@ public sealed class Neo4jSinkTask : SinkTask
         if (_batch.Count == 0 || _driver == null)
             return;
 
+        if (!string.IsNullOrEmpty(_customCypher))
+        {
+            // A custom statement does its own labelling.
+            await WriteRowsAsync(_customCypher, _batch);
+            _batch.Clear();
+            return;
+        }
+
+        // With neo4j.node.label.field configured the label varies per record, so the
+        // batch is written as one UNWIND per distinct label instead of forcing every
+        // record onto the static label.
+        foreach (var group in _batch.GroupBy(ResolveLabel, StringComparer.Ordinal))
+        {
+            var rows = group.ToList();
+
+            if (string.IsNullOrEmpty(group.Key))
+            {
+                // Poison records: no label to write them under. Skip, but stay visible.
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"Skipping {rows.Count} record(s): neither '{Neo4jConnectorConfig.NodeLabelFieldConfig}' nor " +
+                    $"'{Neo4jConnectorConfig.LabelConfig}' yielded a node label"));
+                continue;
+            }
+
+            await WriteRowsAsync(BuildBatchQuery(group.Key), rows);
+        }
+
+        _batch.Clear();
+    }
+
+    private async Task WriteRowsAsync(string query, IReadOnlyList<Dictionary<string, object?>> rows)
+    {
         var retryCount = 0;
-        while (retryCount < _maxRetryCount)
+        while (true)
         {
             try
             {
-                await using var session = _driver.AsyncSession(o => o.WithDatabase(_database));
+                await using var session = _driver!.AsyncSession(o => o.WithDatabase(_database));
 
                 await session.ExecuteWriteAsync(async tx =>
                 {
-                    var query = BuildBatchQuery();
-                    var parameters = new Dictionary<string, object?> { [_unwindParameter] = _batch };
+                    var parameters = new Dictionary<string, object?> { [_unwindParameter] = rows };
 
                     await tx.RunAsync(query, parameters);
                 });
 
-                _batch.Clear();
                 return;
             }
             catch (Exception ex)
@@ -129,7 +159,7 @@ public sealed class Neo4jSinkTask : SinkTask
                 retryCount++;
                 if (retryCount >= _maxRetryCount)
                 {
-                    Console.Error.WriteLine($"Neo4j batch write failed after {_maxRetryCount} retries: {ex.Message}");
+                    Context?.RaiseError?.Invoke(ex);
                     throw;
                 }
                 await Task.Delay(TimeSpan.FromMilliseconds(_retryDelayMs * retryCount));
@@ -137,20 +167,35 @@ public sealed class Neo4jSinkTask : SinkTask
         }
     }
 
-    private string BuildBatchQuery()
+    /// <summary>
+    /// Label for a single row: the value of the configured label field when present,
+    /// otherwise the static label.
+    /// </summary>
+    private string ResolveLabel(Dictionary<string, object?> row)
     {
-        if (!string.IsNullOrEmpty(_customCypher))
+        if (!string.IsNullOrEmpty(_nodeLabelField) &&
+            row.TryGetValue(_nodeLabelField, out var value) &&
+            value?.ToString() is { Length: > 0 } dynamicLabel)
         {
-            return _customCypher;
+            return dynamicLabel;
         }
 
+        return _label;
+    }
+
+    /// <summary>
+    /// Quotes a label as a Cypher identifier. Labels can originate from record data when
+    /// neo4j.node.label.field is configured, so they are never inlined unescaped.
+    /// </summary>
+    private static string EscapeLabel(string label)
+        => $"`{label.Replace("`", "``", StringComparison.Ordinal)}`";
+
+    private string BuildBatchQuery(string label)
+    {
         var sb = new StringBuilder();
         sb.AppendLine($"UNWIND ${_unwindParameter} AS event");
 
-        // Determine label
-        var labelExpression = !string.IsNullOrEmpty(_nodeLabelField)
-            ? $"event.{_nodeLabelField}"
-            : $"'{_label}'";
+        var escapedLabel = EscapeLabel(label);
 
         if (_writeMode.Equals("merge", StringComparison.OrdinalIgnoreCase))
         {
@@ -162,30 +207,19 @@ public sealed class Neo4jSinkTask : SinkTask
                     : [_idProperty];
 
                 var mergePropsStr = string.Join(", ", mergeProps.Select(p => $"{p}: event.{p}"));
-                sb.AppendLine($"MERGE (n:{_label} {{{mergePropsStr}}})");
+                sb.AppendLine($"MERGE (n:{escapedLabel} {{{mergePropsStr}}})");
             }
             else
             {
                 // Simple MERGE on all properties (not recommended for production)
-                sb.AppendLine($"MERGE (n:{_label})");
+                sb.AppendLine($"MERGE (n:{escapedLabel})");
             }
 
             sb.AppendLine("SET n += event");
         }
         else // create
         {
-            // Use dynamic label if configured
-            if (!string.IsNullOrEmpty(_nodeLabelField))
-            {
-                // Dynamic label requires APOC or post-processing
-                // For simplicity, we'll use the static label
-                sb.AppendLine($"CREATE (n:{_label})");
-            }
-            else
-            {
-                sb.AppendLine($"CREATE (n:{_label})");
-            }
-
+            sb.AppendLine($"CREATE (n:{escapedLabel})");
             sb.AppendLine("SET n = event");
         }
 
@@ -211,8 +245,11 @@ public sealed class Neo4jSinkTask : SinkTask
                 kv => ConvertToNeo4jType(kv.Value)
             );
         }
-        catch
+        catch (JsonException ex)
         {
+            // Poison record: skip it, but surface it instead of dropping it silently.
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Skipping record {record.Topic}[{record.Partition}]@{record.Offset}: value is not valid JSON", ex));
             return null;
         }
     }

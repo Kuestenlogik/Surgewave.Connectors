@@ -18,9 +18,7 @@ public static class FacebookConnectorConfig
     public const string WebhookVerifyToken = "facebook.webhook.verify.token";
     public const string WebhookPort = "facebook.webhook.port";
     public const string WebhookPath = "facebook.webhook.path";
-    public const string IncludeComments = "facebook.include.comments";
-    public const string IncludeReactions = "facebook.include.reactions";
-    public const string PollIntervalMs = "facebook.poll.interval.ms";
+    public const string SignatureHeader = "X-Hub-Signature-256";
 
     // Sink settings
     public const string MessageField = "facebook.message.field";
@@ -32,8 +30,5 @@ public static class FacebookConnectorConfig
     public const string DefaultApiVersion = "v18.0";
     public const string DefaultWebhookPath = "/webhook/facebook";
     public const int DefaultWebhookPort = 8081;
-    public const int DefaultPollIntervalMs = 60000;
-    public const bool DefaultIncludeComments = true;
-    public const bool DefaultIncludeReactions = true;
     public const string BaseUrl = "https://graph.facebook.com";
 }

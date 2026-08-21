@@ -43,6 +43,26 @@ public sealed class ComprehendSinkTaskTests
     }
 
     [Fact]
+    public void ComprehendSinkTask_OverridesFlushAsync_ToDrainBufferedRecords()
+    {
+        // The worker commits offsets right after FlushAsync - a buffered sink must
+        // drain its buffer there, not only when the batch size is reached
+        var flushAsync = typeof(ComprehendSinkTask).GetMethod(nameof(SinkTask.FlushAsync));
+
+        Assert.NotNull(flushAsync);
+        Assert.Equal(typeof(ComprehendSinkTask), flushAsync!.DeclaringType);
+    }
+
+    [Fact]
+    public async Task ComprehendSinkTask_FlushAsync_CompletesWithEmptyBufferBeforeStart()
+    {
+        using var task = new ComprehendSinkTask();
+        task.Initialize(CreateTaskContext());
+
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+    }
+
+    [Fact]
     public void ComprehendConnectorConfig_HasCorrectTopicsConfig()
     {
         Assert.Equal("topics", ComprehendConnectorConfig.TopicsConfig);

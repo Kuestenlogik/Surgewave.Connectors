@@ -271,6 +271,96 @@ public sealed class OpenAISinkTaskTests
         task.Stop();
     }
 
+    [Fact]
+    public void OpenAISinkTask_Start_RejectsUnknownOutputFormat()
+    {
+        using var task = new OpenAISinkTask();
+        task.Initialize(CreateTaskContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [OpenAIConnectorConfig.ApiKeyConfig] = "test-api-key",
+            [OpenAIConnectorConfig.TopicsConfig] = "test-topic",
+            [OpenAIConnectorConfig.OutputFormatConfig] = "yaml"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => task.Start(config));
+        Assert.Contains(OpenAIConnectorConfig.OutputFormatConfig, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OpenAISinkTask_Start_RejectsOutputTopicWithoutProducer()
+    {
+        using var task = new OpenAISinkTask();
+        task.Initialize(CreateTaskContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [OpenAIConnectorConfig.ApiKeyConfig] = "test-api-key",
+            [OpenAIConnectorConfig.TopicsConfig] = "test-topic",
+            [OpenAIConnectorConfig.OutputTopicConfig] = "results"
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => task.Start(config));
+        Assert.Contains(OpenAIConnectorConfig.OutputTopicConfig, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpenAISinkTask_FlushAsync_SurfacesRecordsWithoutInputField()
+    {
+        var errors = new List<Exception>();
+        using var task = new OpenAISinkTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+
+        var config = new Dictionary<string, string>
+        {
+            [OpenAIConnectorConfig.ApiKeyConfig] = "test-api-key",
+            [OpenAIConnectorConfig.TopicsConfig] = "test-topic",
+            [OpenAIConnectorConfig.BatchSizeConfig] = "1000" // only FlushAsync drains the buffer
+        };
+
+        task.Start(config);
+
+        // Records without the configured input field are skipped, so no OpenAI call happens
+        await task.PutAsync([CreateSinkRecord("test-topic", 0, 0, """{"other": "x"}""")], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        var error = Assert.Single(errors);
+        Assert.Contains("test-topic:0:0", error.Message, StringComparison.Ordinal);
+
+        task.Stop();
+    }
+
+    [Fact]
+    public async Task OpenAISinkTask_PutAsync_FlushesBufferOnceBatchTimeoutElapsed()
+    {
+        var errors = new List<Exception>();
+        using var task = new OpenAISinkTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+
+        var config = new Dictionary<string, string>
+        {
+            [OpenAIConnectorConfig.ApiKeyConfig] = "test-api-key",
+            [OpenAIConnectorConfig.TopicsConfig] = "test-topic",
+            [OpenAIConnectorConfig.BatchSizeConfig] = "1000", // never reached
+            [OpenAIConnectorConfig.BatchTimeoutMsConfig] = "50"
+        };
+
+        task.Start(config);
+
+        await task.PutAsync([CreateSinkRecord("test-topic", 0, 0, """{"other": "x"}""")], CancellationToken.None);
+        Assert.Empty(errors);
+
+        await Task.Delay(150, CancellationToken.None);
+
+        // The second put is past batch.timeout.ms, so the buffer drains without reaching batch.size
+        await task.PutAsync([CreateSinkRecord("test-topic", 0, 1, """{"other": "y"}""")], CancellationToken.None);
+
+        Assert.Equal(2, errors.Count);
+
+        task.Stop();
+    }
+
     private static TaskContext CreateTaskContext()
     {
         return new TaskContext

@@ -32,7 +32,9 @@ public sealed class VectorStoreSinkConnector : SinkConnector
         .Define(EmbeddingFieldConfig, ConfigType.String, "embedding", Importance.Medium, "JSON field containing the float[] embedding vector")
         .Define(ContentFieldConfig, ConfigType.String, "content", Importance.Medium, "JSON field containing the text content")
         .Define(IdFieldConfig, ConfigType.String, "id", Importance.Medium, "JSON field for the document ID (falls back to record key)")
-        .Define(PersistenceTopicConfig, ConfigType.String, "", Importance.Low, "If set, persist vectors to a compacted topic for durability");
+        .Define(PersistenceTopicConfig, ConfigType.String, "", Importance.Low,
+            "If set, every flush publishes a full snapshot to this compacted topic. Restore by replaying " +
+            "it through a second sink instance on the same collection.name - there is no restore on start.");
 
     private string _collectionName = "";
     private string _topics = "";
@@ -69,6 +71,18 @@ public sealed class VectorStoreSinkConnector : SinkConnector
         if (config.TryGetValue(PersistenceTopicConfig, out var persistenceTopic))
         {
             _persistenceTopic = persistenceTopic;
+        }
+
+        // Consuming the snapshot topic that this connector writes on every flush would feed the
+        // snapshot back into itself and amplify it without bound.
+        if (!string.IsNullOrEmpty(_persistenceTopic) &&
+            _topics.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Contains(_persistenceTopic, StringComparer.Ordinal))
+        {
+            throw new ArgumentException(
+                $"'{PersistenceTopicConfig}' ('{_persistenceTopic}') must not be listed in '{TopicsConfig}': " +
+                "the snapshot written on flush would be consumed and republished in a loop. Restore with a " +
+                "second sink instance on the same collection.name instead.");
         }
     }
 

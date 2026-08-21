@@ -1,19 +1,25 @@
-using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
 using Telegram.Bot;
-using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 
 namespace Kuestenlogik.Surgewave.Connector.Telegram;
 
 /// <summary>
-/// Task that receives messages from Telegram via Bot API.
+/// Task that receives messages from Telegram via Bot API long polling.
 /// </summary>
 public sealed class TelegramSourceTask : SourceTask
 {
+    private const int MaxUpdatesPerPoll = 100;
+    private const int LongPollTimeoutSeconds = 5;
+    private const int ErrorBackoffMs = 1000;
+
+    private static readonly UpdateType[] AllowedUpdates =
+        [UpdateType.Message, UpdateType.EditedMessage, UpdateType.ChannelPost, UpdateType.EditedChannelPost];
+
     private TelegramBotClient? _client;
     private string _topic = null!;
     private HashSet<long> _chatIds = [];
@@ -21,8 +27,14 @@ public sealed class TelegramSourceTask : SourceTask
     private bool _includeChannels;
     private bool _includePrivate;
     private string _messageTypes = "all";
-    private readonly ConcurrentQueue<SourceRecord> _pendingRecords = new();
-    private CancellationTokenSource? _pollingCts;
+    private readonly Dictionary<string, object> _sourcePartition = [];
+
+    /// <summary>Highest update id that Surgewave committed - only this is acknowledged to Telegram.</summary>
+    private int _committedUpdateId;
+
+    /// <summary>Highest update id handed to the framework by the batch in flight.</summary>
+    private int _polledUpdateId;
+
     private long _messageId;
 
     public override string Version => "1.0.0";
@@ -43,46 +55,39 @@ public sealed class TelegramSourceTask : SourceTask
         }
 
         _client = new TelegramBotClient(token);
-        _pollingCts = new CancellationTokenSource();
 
-        // Start polling
-        _client.StartReceiving(
-            updateHandler: HandleUpdateAsync,
-            errorHandler: HandleErrorAsync,
-            receiverOptions: new ReceiverOptions
-            {
-                AllowedUpdates = [UpdateType.Message, UpdateType.EditedMessage, UpdateType.ChannelPost, UpdateType.EditedChannelPost]
-            },
-            cancellationToken: _pollingCts.Token);
+        // The getUpdates cursor belongs to the bot, not to a single chat. The bot id is the
+        // public part of the token, so it identifies the partition without storing the secret.
+        var separator = token.IndexOf(':');
+        _sourcePartition[TelegramConnectorConfig.PartitionSource] = "telegram";
+        _sourcePartition[TelegramConnectorConfig.PartitionBotId] = separator > 0 ? token[..separator] : "unknown";
+
+        _committedUpdateId = ReadStoredUpdateId();
+        _polledUpdateId = _committedUpdateId;
     }
 
-    private Task HandleUpdateAsync(ITelegramBotClient client, Update update, CancellationToken cancellationToken)
+    private int ReadStoredUpdateId()
     {
-        var message = update.Message ?? update.EditedMessage ?? update.ChannelPost ?? update.EditedChannelPost;
-        if (message == null) return Task.CompletedTask;
+        var stored = Context?.OffsetStorageReader?.Offset(_sourcePartition);
 
-        if (!ShouldProcess(message)) return Task.CompletedTask;
-
-        var eventType = update.Type switch
+        if (stored != null &&
+            stored.TryGetValue(TelegramConnectorConfig.OffsetUpdateId, out var raw) &&
+            int.TryParse(raw?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var updateId))
         {
-            UpdateType.Message => "message",
-            UpdateType.EditedMessage => "message_edit",
-            UpdateType.ChannelPost => "channel_post",
-            UpdateType.EditedChannelPost => "channel_post_edit",
-            _ => "unknown"
-        };
+            return updateId;
+        }
 
-        var record = CreateMessageRecord(message, eventType);
-        _pendingRecords.Enqueue(record);
-
-        return Task.CompletedTask;
+        return 0;
     }
 
-    private Task HandleErrorAsync(ITelegramBotClient client, Exception exception, HandleErrorSource source, CancellationToken cancellationToken)
+    private static string EventTypeOf(Update update) => update.Type switch
     {
-        // Log error and continue
-        return Task.CompletedTask;
-    }
+        UpdateType.Message => "message",
+        UpdateType.EditedMessage => "message_edit",
+        UpdateType.ChannelPost => "channel_post",
+        UpdateType.EditedChannelPost => "channel_post_edit",
+        _ => "unknown"
+    };
 
     private bool ShouldProcess(Message message)
     {
@@ -124,7 +129,7 @@ public sealed class TelegramSourceTask : SourceTask
         return true;
     }
 
-    private SourceRecord CreateMessageRecord(Message message, string eventType)
+    private SourceRecord CreateMessageRecord(Message message, string eventType, int updateId)
     {
         var payload = new
         {
@@ -163,13 +168,10 @@ public sealed class TelegramSourceTask : SourceTask
 
         return new SourceRecord
         {
-            SourcePartition = new Dictionary<string, object>
-            {
-                ["source"] = "telegram",
-                ["chat_id"] = message.Chat.Id.ToString()
-            },
+            SourcePartition = new Dictionary<string, object>(_sourcePartition),
             SourceOffset = new Dictionary<string, object>
             {
+                [TelegramConnectorConfig.OffsetUpdateId] = updateId,
                 ["message_id"] = Interlocked.Increment(ref _messageId),
                 ["telegram_message_id"] = message.MessageId
             },
@@ -181,30 +183,84 @@ public sealed class TelegramSourceTask : SourceTask
         };
     }
 
-    public override Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
+    public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
     {
         var records = new List<SourceRecord>();
 
-        while (_pendingRecords.TryDequeue(out var record) && records.Count < 100)
+        var client = _client;
+        if (client == null) return records;
+
+        try
         {
-            records.Add(record);
+            // Telegram acknowledges everything below the requested offset, so only the committed
+            // update id is passed on: anything not committed yet is redelivered after a crash.
+            var updates = await client.GetUpdates(
+                offset: _committedUpdateId == 0 ? null : _committedUpdateId + 1,
+                limit: MaxUpdatesPerPoll,
+                timeout: LongPollTimeoutSeconds,
+                allowedUpdates: AllowedUpdates,
+                cancellationToken: cancellationToken);
+
+            foreach (var update in updates)
+            {
+                if (update.Id > _polledUpdateId)
+                    _polledUpdateId = update.Id;
+
+                var message = update.Message ?? update.EditedMessage ?? update.ChannelPost ?? update.EditedChannelPost;
+                if (message == null) continue;
+
+                if (!ShouldProcess(message)) continue;
+
+                records.Add(CreateMessageRecord(message, EventTypeOf(update), update.Id));
+            }
+
+            // Filtered-out updates produce no record and would otherwise be redelivered forever.
+            if (records.Count == 0)
+                _committedUpdateId = _polledUpdateId;
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal cancellation
+        }
+        catch (Exception ex)
+        {
+            // A rejected bot token or a transient Bot API failure must be visible instead of
+            // silently producing nothing.
+            Context?.RaiseError?.Invoke(ex);
+
+            try
+            {
+                await Task.Delay(ErrorBackoffMs, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal cancellation
+            }
         }
 
-        return Task.FromResult<IReadOnlyList<SourceRecord>>(records);
+        return records;
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (record.SourceOffset.TryGetValue(TelegramConnectorConfig.OffsetUpdateId, out var raw) &&
+            int.TryParse(raw?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var updateId) &&
+            updateId > _committedUpdateId)
+        {
+            _committedUpdateId = updateId;
+        }
+    }
+
+    public override Task CommitAsync(CancellationToken cancellationToken)
+    {
+        // The whole polled batch is durable, so every update it covered may be acknowledged.
+        if (_polledUpdateId > _committedUpdateId)
+            _committedUpdateId = _polledUpdateId;
+
+        return Task.CompletedTask;
     }
 
     public override void Stop()
     {
-        _pollingCts?.Cancel();
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            Stop();
-            _pollingCts?.Dispose();
-        }
-        base.Dispose(disposing);
     }
 }
