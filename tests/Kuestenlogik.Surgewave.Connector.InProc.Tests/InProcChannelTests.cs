@@ -6,6 +6,7 @@ namespace Kuestenlogik.Surgewave.Connector.InProc.Tests;
 /// <summary>
 /// Tests for the InProcChannel registry.
 /// </summary>
+[Collection("InProcChannel")]
 public sealed class InProcChannelTests : IDisposable
 {
     public InProcChannelTests()

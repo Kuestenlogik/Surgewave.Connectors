@@ -8,6 +8,7 @@ namespace Kuestenlogik.Surgewave.Connector.InProc.Tests;
 /// <summary>
 /// Tests for InProc source and sink tasks using channel mode.
 /// </summary>
+[Collection("InProcChannel")]
 public sealed class InProcTaskTests : IDisposable
 {
     private readonly List<InProcSourceTask> _sourceTasks = [];
