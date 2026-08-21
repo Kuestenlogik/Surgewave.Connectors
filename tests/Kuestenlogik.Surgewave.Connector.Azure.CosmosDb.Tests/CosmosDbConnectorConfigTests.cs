@@ -27,8 +27,6 @@ public class CosmosDbConnectorConfigTests
         Assert.Equal("azure.cosmosdb.changefeed.start.from", CosmosDbConnectorConfig.ChangeFeedStartFromConfig);
         Assert.Equal("azure.cosmosdb.changefeed.max.items", CosmosDbConnectorConfig.ChangeFeedMaxItemsConfig);
         Assert.Equal("azure.cosmosdb.changefeed.poll.interval.ms", CosmosDbConnectorConfig.ChangeFeedPollIntervalMsConfig);
-        Assert.Equal("azure.cosmosdb.lease.container", CosmosDbConnectorConfig.LeaseContainerConfig);
-        Assert.Equal("azure.cosmosdb.lease.prefix", CosmosDbConnectorConfig.LeaseContainerPrefixConfig);
     }
 
     [Fact]
@@ -68,7 +66,6 @@ public class CosmosDbConnectorConfigTests
         Assert.Equal(9, CosmosDbConnectorConfig.DefaultMaxRetryCount);
         Assert.Equal(30000L, CosmosDbConnectorConfig.DefaultMaxRetryWaitTimeMs);
         Assert.Equal("cosmosdb.${database}.${container}", CosmosDbConnectorConfig.DefaultTopicPattern);
-        Assert.Equal("surgewave-connector", CosmosDbConnectorConfig.DefaultLeaseContainerPrefix);
     }
 
     [Fact]

@@ -67,8 +67,9 @@ public sealed class ServiceBusSourceTask : SourceTask
 
     public override void Stop()
     {
-        // Complete any pending messages before stopping
-        CompletePendingMessagesAsync(CancellationToken.None).GetAwaiter().GetResult();
+        // Abandon uncommitted messages so Service Bus redelivers them - completing them
+        // here would delete messages that were never durably written to Surgewave
+        AbandonPendingMessagesAsync().GetAwaiter().GetResult();
 
         _receiver?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _client?.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -82,7 +83,7 @@ public sealed class ServiceBusSourceTask : SourceTask
         {
             try
             {
-                CompletePendingMessagesAsync(CancellationToken.None).GetAwaiter().GetResult();
+                AbandonPendingMessagesAsync().GetAwaiter().GetResult();
             }
             catch
             {
@@ -94,6 +95,34 @@ public sealed class ServiceBusSourceTask : SourceTask
             _client = null;
         }
         base.Dispose(disposing);
+    }
+
+    private async Task AbandonPendingMessagesAsync()
+    {
+        if (_receiver == null)
+            return;
+
+        List<ServiceBusReceivedMessage> messages;
+        lock (_messageLock)
+        {
+            if (_pendingMessages.Count == 0)
+                return;
+
+            messages = [.. _pendingMessages];
+            _pendingMessages.Clear();
+        }
+
+        foreach (var message in messages)
+        {
+            try
+            {
+                await _receiver.AbandonMessageAsync(message);
+            }
+            catch (ServiceBusException)
+            {
+                // Best effort - the peek lock expires on its own and the message is redelivered
+            }
+        }
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

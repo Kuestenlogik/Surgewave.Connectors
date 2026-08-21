@@ -77,6 +77,7 @@ public static class AzureOpenAIConnectorConfig
     public const string FormatJson = "json";
     public const string FormatMerge = "merge";
 
-    // Webhook configuration
+    // Result destination configuration
+    public const string OutputTopicConfig = "output.topic";
     public const string WebhookUrlConfig = "webhook.url";
 }

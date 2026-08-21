@@ -17,6 +17,8 @@ public sealed class PubSubSinkTask : SinkTask
     private string _orderingKeyField = "";
     private string _headerPrefix = PubSubConnectorConfig.DefaultHeaderPrefix;
     private int _batchSize = PubSubConnectorConfig.DefaultBatchSize;
+    private int _batchDelayMs = PubSubConnectorConfig.DefaultBatchDelayMs;
+    private DateTime _lastFlush = DateTime.UtcNow;
 
     private readonly List<PubsubMessage> _messageBuffer = new();
     private readonly object _bufferLock = new();
@@ -32,6 +34,7 @@ public sealed class PubSubSinkTask : SinkTask
         _orderingKeyField = GetConfigValue(config, PubSubConnectorConfig.OrderingKeyFieldConfig, "");
         _headerPrefix = GetConfigValue(config, PubSubConnectorConfig.HeaderPrefixConfig, PubSubConnectorConfig.DefaultHeaderPrefix);
         _batchSize = GetConfigInt(config, PubSubConnectorConfig.BatchSizeConfig, PubSubConnectorConfig.DefaultBatchSize);
+        _batchDelayMs = GetConfigInt(config, PubSubConnectorConfig.BatchDelayMsConfig, PubSubConnectorConfig.DefaultBatchDelayMs);
 
         var credentialsJson = GetConfigValue(config, PubSubConnectorConfig.CredentialsJsonConfig, "");
         var credentialsFile = GetConfigValue(config, PubSubConnectorConfig.CredentialsFileConfig, "");
@@ -116,8 +119,8 @@ public sealed class PubSubSinkTask : SinkTask
                 _messageBuffer.Add(message);
             }
 
-            // Flush when batch size is reached
-            if (_messageBuffer.Count >= _batchSize)
+            // Flush when the batch size is reached or the batch delay has elapsed
+            if (_messageBuffer.Count >= _batchSize || (DateTime.UtcNow - _lastFlush).TotalMilliseconds >= _batchDelayMs)
             {
                 await FlushBufferAsync(cancellationToken);
             }
@@ -137,6 +140,8 @@ public sealed class PubSubSinkTask : SinkTask
         List<PubsubMessage> messages;
         lock (_bufferLock)
         {
+            _lastFlush = DateTime.UtcNow;
+
             if (_messageBuffer.Count == 0)
                 return;
 

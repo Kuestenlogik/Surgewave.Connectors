@@ -40,11 +40,7 @@ public sealed class GitSourceConnector : SourceConnector
         .Define(GitConnectorConfig.UsernameConfig, ConfigType.String, "", Importance.Low,
             "Username for remote authentication")
         .Define(GitConnectorConfig.PasswordConfig, ConfigType.Password, "", Importance.Low,
-            "Password or token for remote authentication")
-        .Define(GitConnectorConfig.SshKeyPathConfig, ConfigType.String, "", Importance.Low,
-            "Path to SSH private key file")
-        .Define(GitConnectorConfig.SshKeyPassphraseConfig, ConfigType.Password, "", Importance.Low,
-            "Passphrase for SSH private key");
+            "Password or token for remote authentication");
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -60,6 +56,14 @@ public sealed class GitSourceConnector : SourceConnector
             string.IsNullOrWhiteSpace(repoPath))
         {
             throw new ArgumentException($"Missing required config: {GitConnectorConfig.RepositoryPathConfig}");
+        }
+
+        if (config.TryGetValue(GitConnectorConfig.SshKeyPathConfig, out var sshKeyPath) &&
+            !string.IsNullOrWhiteSpace(sshKeyPath))
+        {
+            throw new ArgumentException(
+                $"'{GitConnectorConfig.SshKeyPathConfig}' is not supported: SSH authentication is not available. " +
+                $"Use '{GitConnectorConfig.UsernameConfig}'/'{GitConnectorConfig.PasswordConfig}' with an HTTPS remote instead.");
         }
     }
 

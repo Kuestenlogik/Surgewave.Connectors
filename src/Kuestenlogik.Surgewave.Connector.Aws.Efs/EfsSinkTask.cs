@@ -96,20 +96,40 @@ public sealed class EfsSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
+            Dictionary<string, JsonElement>? data;
             try
             {
                 var json = Encoding.UTF8.GetString(record.Value);
-                var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
-                if (data == null) continue;
+                data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json, JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                // Poison record: the payload will never parse - surface it and skip
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
 
-                var operation = data.TryGetValue(_operationField, out var opEl) ? opEl.GetString() : null;
-                if (string.IsNullOrEmpty(operation)) continue;
+            if (data == null) continue;
 
+            var operation = data.TryGetValue(_operationField, out var opEl) && opEl.ValueKind == JsonValueKind.String
+                ? opEl.GetString()
+                : null;
+            if (string.IsNullOrEmpty(operation)) continue;
+
+            try
+            {
                 await ProcessOperationAsync(operation, data, cancellationToken);
             }
-            catch (Exception)
+            catch (NotSupportedException ex)
             {
-                // Log and continue
+                // Unknown operation: retrying cannot fix the record - surface it and skip
+                Context?.RaiseError?.Invoke(ex);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A failed EFS call must fail the batch so the worker can retry or dead-letter it
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }
@@ -145,6 +165,9 @@ public sealed class EfsSinkTask : SinkTask
             case EfsConnectorConfig.OperationDeleteMountTarget:
                 await DeleteMountTargetAsync(data, cancellationToken);
                 break;
+
+            default:
+                throw new NotSupportedException($"Unknown EFS operation '{operation}'");
         }
     }
 

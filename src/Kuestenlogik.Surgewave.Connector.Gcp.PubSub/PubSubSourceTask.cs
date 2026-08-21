@@ -17,6 +17,7 @@ public sealed class PubSubSourceTask : SourceTask
     private string _surgewaveTopic = "";
     private int _maxMessages = PubSubConnectorConfig.DefaultMaxMessages;
     private bool _autoAck = PubSubConnectorConfig.DefaultAutoAck;
+    private int _ackDeadlineSeconds = PubSubConnectorConfig.DefaultAckDeadlineSeconds;
     private string _headerPrefix = PubSubConnectorConfig.DefaultHeaderPrefix;
     private bool _includeMetadata = PubSubConnectorConfig.DefaultIncludeMetadata;
 
@@ -34,6 +35,7 @@ public sealed class PubSubSourceTask : SourceTask
 
         _maxMessages = GetConfigInt(config, PubSubConnectorConfig.MaxMessagesConfig, PubSubConnectorConfig.DefaultMaxMessages);
         _autoAck = GetConfigBool(config, PubSubConnectorConfig.AutoAckConfig, PubSubConnectorConfig.DefaultAutoAck);
+        _ackDeadlineSeconds = GetConfigInt(config, PubSubConnectorConfig.AckDeadlineSecondsConfig, PubSubConnectorConfig.DefaultAckDeadlineSeconds);
         _headerPrefix = GetConfigValue(config, PubSubConnectorConfig.HeaderPrefixConfig, PubSubConnectorConfig.DefaultHeaderPrefix);
         _includeMetadata = GetConfigBool(config, PubSubConnectorConfig.IncludeMetadataConfig, PubSubConnectorConfig.DefaultIncludeMetadata);
 
@@ -89,7 +91,8 @@ public sealed class PubSubSourceTask : SourceTask
 
     public override void Stop()
     {
-        // Acknowledge any pending messages before stopping
+        // Acknowledge only records already produced and committed (tracked via CommitRecord);
+        // undelivered messages stay unacknowledged and are redelivered after the ack deadline
         AcknowledgePendingMessages();
         _subscriberClient = null;
     }
@@ -123,25 +126,26 @@ public sealed class PubSubSourceTask : SourceTask
 
             foreach (var receivedMessage in response.ReceivedMessages)
             {
-                var record = CreateSourceRecord(receivedMessage);
-                records.Add(record);
+                records.Add(CreateSourceRecord(receivedMessage));
+            }
 
-                if (_autoAck)
-                {
-                    // Acknowledge immediately if auto-ack is enabled
-                    await _subscriberClient.AcknowledgeAsync(
-                        _subscriptionName,
-                        [receivedMessage.AckId],
-                        cancellationToken);
-                }
-                else
-                {
-                    // Track for later acknowledgment on commit
-                    lock (_ackLock)
-                    {
-                        _pendingAckIds.Add(receivedMessage.AckId);
-                    }
-                }
+            var ackIds = response.ReceivedMessages.Select(m => m.AckId).ToList();
+
+            if (_autoAck)
+            {
+                // Explicit opt-in to at-most-once: acknowledge on pull, before the
+                // records are produced - a crash before delivery loses these messages
+                await _subscriberClient.AcknowledgeAsync(_subscriptionName, ackIds, cancellationToken);
+            }
+            else if (_ackDeadlineSeconds > 0)
+            {
+                // Keep the messages leased until they are produced and committed;
+                // they are acknowledged in CommitRecord/CommitAsync
+                await _subscriberClient.ModifyAckDeadlineAsync(
+                    _subscriptionName,
+                    ackIds,
+                    _ackDeadlineSeconds,
+                    cancellationToken);
             }
 
             return records;
@@ -150,6 +154,21 @@ public sealed class PubSubSourceTask : SourceTask
         {
             // No messages available within the deadline, return empty
             return [];
+        }
+    }
+
+    public override void CommitRecord(SourceRecord record, RecordMetadata metadata)
+    {
+        if (_autoAck)
+            return;
+
+        // Only a record that was actually produced to Surgewave may be acknowledged
+        if (record.SourceOffset.TryGetValue("ackId", out var ackId) && ackId is string id)
+        {
+            lock (_ackLock)
+            {
+                _pendingAckIds.Add(id);
+            }
         }
     }
 

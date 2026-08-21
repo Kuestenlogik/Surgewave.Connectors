@@ -140,17 +140,36 @@ public class GitSinkConnectorTests
     }
 
     [Fact]
-    public void Config_DefinesSshKeyPathConfig()
+    public void Config_DoesNotAdvertiseUnsupportedSshKeys()
     {
         var connector = new GitSinkConnector();
-        Assert.Contains(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPathConfig);
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPathConfig);
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
     }
 
     [Fact]
-    public void Config_DefinesSshKeyPassphraseConfig()
+    public void Start_ThrowsWhenSshKeyPathConfigured()
     {
         var connector = new GitSinkConnector();
-        Assert.Contains(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
+        var config = new Dictionary<string, string>
+        {
+            [GitConnectorConfig.TopicsConfig] = "events",
+            [GitConnectorConfig.RepositoryPathConfig] = "/tmp/repo",
+            [GitConnectorConfig.SshKeyPathConfig] = "/home/user/.ssh/id_ed25519"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
+        Assert.Contains(GitConnectorConfig.SshKeyPathConfig, ex.Message);
+    }
+
+    [Fact]
+    public void Config_OutputModeOptionsAreImplementedModes()
+    {
+        var connector = new GitSinkConnector();
+        var modeKey = connector.Config.Keys.First(k => k.Name == GitConnectorConfig.OutputModeConfig);
+
+        Assert.NotNull(modeKey.Options);
+        Assert.Equal(new[] { GitConnectorConfig.OutputModeWrite, GitConnectorConfig.OutputModeAppend }, modeKey.Options!);
     }
 
     [Fact]
@@ -302,14 +321,6 @@ public class GitSinkConnectorTests
         var passwordKey = connector.Config.Keys.First(k => k.Name == GitConnectorConfig.PasswordConfig);
         Assert.Equal(ConfigType.Password, passwordKey.Type);
     }
-
-    [Fact]
-    public void Config_SshKeyPassphraseIsPasswordType()
-    {
-        var connector = new GitSinkConnector();
-        var passphraseKey = connector.Config.Keys.First(k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
-        Assert.Equal(ConfigType.Password, passphraseKey.Type);
-    }
 }
 
 public class GitSinkTaskTests
@@ -319,6 +330,19 @@ public class GitSinkTaskTests
     {
         using var task = new GitSinkTask();
         Assert.Equal("1.0.0", task.Version);
+    }
+
+    [Fact]
+    public void Start_ThrowsWhenRepositoryPathDoesNotExist()
+    {
+        using var task = new GitSinkTask();
+        var config = new Dictionary<string, string>
+        {
+            [GitConnectorConfig.RepositoryPathConfig] = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"))
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => task.Start(config));
+        Assert.Contains(GitConnectorConfig.RepositoryPathConfig, ex.Message);
     }
 
     [Fact]

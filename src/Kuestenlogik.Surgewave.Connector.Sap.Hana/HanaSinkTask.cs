@@ -41,6 +41,12 @@ public sealed class HanaSinkTask : SinkTask
         _schema = config.GetValueOrDefault(HanaConnectorConfig.Schema, null);
         _writeMode = config.GetValueOrDefault(HanaConnectorConfig.WriteMode,
             HanaConnectorConfig.DefaultWriteMode)!.ToLowerInvariant();
+        if (_writeMode is not ("insert" or "upsert" or "merge"))
+        {
+            throw new ArgumentException(
+                $"Unsupported '{HanaConnectorConfig.WriteMode}' value '{_writeMode}'. Supported values: insert, upsert, merge.");
+        }
+
         _batchSize = int.Parse(config.GetValueOrDefault(HanaConnectorConfig.BatchSize,
             HanaConnectorConfig.DefaultBatchSize.ToString())!);
 
@@ -54,7 +60,9 @@ public sealed class HanaSinkTask : SinkTask
 #if SAP_HANA_AVAILABLE
         _connection = new HanaConnection(_connectionString);
 #else
-        throw new NotSupportedException("SAP HANA driver not installed. Install the SAP HANA client and add the Sap.Data.Hana.Core.v2.1 package.");
+        throw new NotSupportedException(
+            "SAP HANA driver not installed. Install the SAP HANA client, add the Sap.Data.Hana.Core.v2.1 package " +
+            "(see the comment in the connector's csproj) and define SAP_HANA_AVAILABLE, then rebuild the connector.");
 #endif
     }
 
@@ -129,16 +137,18 @@ public sealed class HanaSinkTask : SinkTask
                 {
                     batch.Add(row);
                 }
-
-                if (batch.Count >= _batchSize)
-                {
-                    await FlushBatchAsync(batch, cancellationToken);
-                    batch.Clear();
-                }
             }
-            catch (Exception)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
             {
-                // Log and continue
+                // Poison record (not JSON, or not a JSON object) — surface it and skip
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
+
+            if (batch.Count >= _batchSize)
+            {
+                await FlushBatchAsync(batch, cancellationToken);
+                batch.Clear();
             }
         }
 
@@ -183,9 +193,12 @@ public sealed class HanaSinkTask : SinkTask
 
             await transaction.CommitAsync(ct);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // A failed batch must throw so the worker retries or dead-letters it —
+            // swallowing here would commit consumer offsets over discarded rows
+            Context?.RaiseError?.Invoke(ex);
+            throw;
         }
         finally
         {

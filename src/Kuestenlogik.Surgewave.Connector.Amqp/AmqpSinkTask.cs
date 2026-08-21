@@ -14,18 +14,22 @@ public sealed class AmqpSinkTask : SinkTask
     private string _exchange = null!;
     private string _routingKey = null!;
     private bool _persistent;
-    private int _batchSize;
-    private int _pendingConfirms;
 
     public override string Version => "1.0.0";
 
-    public override async void Start(IDictionary<string, string> config)
+    public override void Start(IDictionary<string, string> config)
+    {
+        // Complete the async setup synchronously: Start must not return before the
+        // connection/channel exist (PutAsync would race a null channel), and a
+        // connection failure must fail the task instead of escaping as async-void.
+        StartAsync(config).GetAwaiter().GetResult();
+    }
+
+    private async Task StartAsync(IDictionary<string, string> config)
     {
         _exchange = config.GetValueOrDefault(AmqpConnectorConfig.TargetExchange, "")!;
         _routingKey = config.GetValueOrDefault(AmqpConnectorConfig.TargetRoutingKey, "")!;
         _persistent = config.GetValueOrDefault(AmqpConnectorConfig.Persistent, "true") == "true";
-        _batchSize = int.Parse(config.GetValueOrDefault(AmqpConnectorConfig.BatchSize,
-            AmqpConnectorConfig.DefaultBatchSize.ToString())!);
 
         var factory = CreateConnectionFactory(config);
         _connection = await factory.CreateConnectionAsync();
@@ -89,85 +93,60 @@ public sealed class AmqpSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
-            try
+            // Determine routing key from record or config
+            var routingKey = _routingKey;
+            if (record.Headers?.TryGetValue("amqp.routing_key", out var rkBytes) == true)
             {
-                // Determine routing key from record or config
-                var routingKey = _routingKey;
-                if (record.Headers?.TryGetValue("amqp.routing_key", out var rkBytes) == true)
-                {
-                    routingKey = Encoding.UTF8.GetString(rkBytes);
-                }
-                else if (record.Key != null)
-                {
-                    routingKey = Encoding.UTF8.GetString(record.Key);
-                }
+                routingKey = Encoding.UTF8.GetString(rkBytes);
+            }
+            else if (record.Key != null)
+            {
+                routingKey = Encoding.UTF8.GetString(record.Key);
+            }
 
-                // Build properties
-                var properties = new BasicProperties
-                {
-                    Persistent = _persistent,
-                    Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
-                };
+            // Build properties
+            var properties = new BasicProperties
+            {
+                Persistent = _persistent,
+                Timestamp = new AmqpTimestamp(DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            };
 
-                // Copy headers from record
-                if (record.Headers != null)
+            // Copy headers from record
+            if (record.Headers != null)
+            {
+                var amqpHeaders = new Dictionary<string, object?>();
+                foreach (var (key, value) in record.Headers)
                 {
-                    var amqpHeaders = new Dictionary<string, object?>();
-                    foreach (var (key, value) in record.Headers)
+                    if (key.StartsWith("amqp.header.", StringComparison.Ordinal))
                     {
-                        if (key.StartsWith("amqp.header.", StringComparison.Ordinal))
-                        {
-                            amqpHeaders[key[12..]] = value;
-                        }
-                    }
-                    if (amqpHeaders.Count > 0)
-                    {
-                        properties.Headers = amqpHeaders;
-                    }
-
-                    // Restore content type if present
-                    if (record.Headers.TryGetValue("amqp.content_type", out var ctBytes))
-                    {
-                        properties.ContentType = Encoding.UTF8.GetString(ctBytes);
-                    }
-                    if (record.Headers.TryGetValue("amqp.correlation_id", out var corrBytes))
-                    {
-                        properties.CorrelationId = Encoding.UTF8.GetString(corrBytes);
-                    }
-                    if (record.Headers.TryGetValue("amqp.message_id", out var midBytes))
-                    {
-                        properties.MessageId = Encoding.UTF8.GetString(midBytes);
+                        amqpHeaders[key[12..]] = value;
                     }
                 }
-
-                await _channel!.BasicPublishAsync(_exchange, routingKey, false, properties, record.Value, cancellationToken);
-                _pendingConfirms++;
-
-                // Wait for confirms in batches
-                if (_pendingConfirms >= _batchSize)
+                if (amqpHeaders.Count > 0)
                 {
-                    await WaitForConfirmsAsync(cancellationToken);
+                    properties.Headers = amqpHeaders;
+                }
+
+                // Restore content type if present
+                if (record.Headers.TryGetValue("amqp.content_type", out var ctBytes))
+                {
+                    properties.ContentType = Encoding.UTF8.GetString(ctBytes);
+                }
+                if (record.Headers.TryGetValue("amqp.correlation_id", out var corrBytes))
+                {
+                    properties.CorrelationId = Encoding.UTF8.GetString(corrBytes);
+                }
+                if (record.Headers.TryGetValue("amqp.message_id", out var midBytes))
+                {
+                    properties.MessageId = Encoding.UTF8.GetString(midBytes);
                 }
             }
-            catch (Exception)
-            {
-                // Log and continue
-            }
-        }
 
-        // Wait for remaining confirms
-        if (_pendingConfirms > 0)
-        {
-            await WaitForConfirmsAsync(cancellationToken);
+            // With publisher confirmations enabled, awaiting BasicPublishAsync waits for
+            // the broker confirm. A publish failure must propagate so the worker
+            // retries/DLQs instead of committing offsets for lost messages.
+            await _channel!.BasicPublishAsync(_exchange, routingKey, false, properties, record.Value, cancellationToken);
         }
-    }
-
-    private Task WaitForConfirmsAsync(CancellationToken ct)
-    {
-        // In RabbitMQ.Client 7.0, awaiting BasicPublishAsync already waits for confirmation
-        // when PublisherConfirmationsEnabled is true
-        _pendingConfirms = 0;
-        return Task.CompletedTask;
     }
 
     public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
@@ -175,7 +154,12 @@ public sealed class AmqpSinkTask : SinkTask
         return Task.CompletedTask;
     }
 
-    public override async void Stop()
+    public override void Stop()
+    {
+        StopAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task StopAsync()
     {
         if (_channel != null)
         {

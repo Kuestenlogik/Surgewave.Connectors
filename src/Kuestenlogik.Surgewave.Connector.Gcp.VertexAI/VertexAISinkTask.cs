@@ -192,6 +192,13 @@ public sealed class VertexAISinkTask : SinkTask
         }
     }
 
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // The worker commits offsets right after this call - drain the buffer so no
+        // consumed record sits unprocessed in memory with a committed offset
+        await FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _predictionClient == null) return;
@@ -470,7 +477,8 @@ public sealed class VertexAISinkTask : SinkTask
 
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            using var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            response.EnsureSuccessStatusCode();
         }
         else
         {

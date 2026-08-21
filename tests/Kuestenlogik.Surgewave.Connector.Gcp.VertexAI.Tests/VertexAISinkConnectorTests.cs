@@ -185,6 +185,43 @@ public sealed class VertexAISinkConnectorTests
     }
 
     [Fact]
+    public void VertexAISinkConnector_Config_ModeOptionsMatchValidatedModes()
+    {
+        using var connector = new VertexAISinkConnector();
+        var modeKey = connector.Config.Keys.First(k => k.Name == VertexAIConnectorConfig.ModeConfig);
+
+        Assert.NotNull(modeKey.Options);
+        Assert.Equal(
+            new[] { VertexAIConnectorConfig.ModeCompletions, VertexAIConnectorConfig.ModeEmbeddings },
+            modeKey.Options!);
+    }
+
+    [Fact]
+    public void VertexAISinkConnector_Start_AcceptsEveryAdvertisedModeOption()
+    {
+        using var connector = new VertexAISinkConnector();
+        connector.Initialize(CreateContext());
+
+        var modeKey = connector.Config.Keys.First(k => k.Name == VertexAIConnectorConfig.ModeConfig);
+        Assert.NotNull(modeKey.Options);
+
+        foreach (var option in modeKey.Options!)
+        {
+            var config = new Dictionary<string, string>
+            {
+                [VertexAIConnectorConfig.ProjectIdConfig] = "test-project",
+                [VertexAIConnectorConfig.TopicsConfig] = "test-topic",
+                [VertexAIConnectorConfig.ModeConfig] = option,
+                [VertexAIConnectorConfig.SystemPromptConfig] = "Test system prompt"
+            };
+
+            // Every option offered in the UI dropdown must pass validation
+            connector.Start(config);
+            connector.Stop();
+        }
+    }
+
+    [Fact]
     public void VertexAISinkConnector_Start_AcceptsValidEmbeddingsConfig()
     {
         using var connector = new VertexAISinkConnector();

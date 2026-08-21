@@ -112,17 +112,26 @@ public class GitSourceConnectorTests
     }
 
     [Fact]
-    public void Config_DefinesSshKeyPathConfig()
+    public void Config_DoesNotAdvertiseUnsupportedSshKeys()
     {
         var connector = new GitSourceConnector();
-        Assert.Contains(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPathConfig);
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPathConfig);
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
     }
 
     [Fact]
-    public void Config_DefinesSshKeyPassphraseConfig()
+    public void Start_ThrowsWhenSshKeyPathConfigured()
     {
         var connector = new GitSourceConnector();
-        Assert.Contains(connector.Config.Keys, k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
+        var config = new Dictionary<string, string>
+        {
+            [GitConnectorConfig.TopicConfig] = "git-events",
+            [GitConnectorConfig.RepositoryPathConfig] = "/tmp/repo",
+            [GitConnectorConfig.SshKeyPathConfig] = "/home/user/.ssh/id_ed25519"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
+        Assert.Contains(GitConnectorConfig.SshKeyPathConfig, ex.Message);
     }
 
     [Fact]
@@ -209,14 +218,6 @@ public class GitSourceConnectorTests
         var connector = new GitSourceConnector();
         var passwordKey = connector.Config.Keys.First(k => k.Name == GitConnectorConfig.PasswordConfig);
         Assert.Equal(ConfigType.Password, passwordKey.Type);
-    }
-
-    [Fact]
-    public void Config_SshKeyPassphraseIsPasswordType()
-    {
-        var connector = new GitSourceConnector();
-        var passphraseKey = connector.Config.Keys.First(k => k.Name == GitConnectorConfig.SshKeyPassphraseConfig);
-        Assert.Equal(ConfigType.Password, passphraseKey.Type);
     }
 
     [Fact]

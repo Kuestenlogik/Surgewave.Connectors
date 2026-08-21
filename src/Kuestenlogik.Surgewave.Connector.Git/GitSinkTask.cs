@@ -66,11 +66,14 @@ public sealed class GitSinkTask : SinkTask
         _username = config.TryGetValue(GitConnectorConfig.UsernameConfig, out var user) ? user : "";
         _password = config.TryGetValue(GitConnectorConfig.PasswordConfig, out var pass) ? pass : "";
 
-        // Open repository
-        if (Directory.Exists(_repositoryPath))
+        // Open repository - fail the task instead of silently acknowledging records
+        if (!Directory.Exists(_repositoryPath))
         {
-            _repository = new Repository(_repositoryPath);
+            throw new ArgumentException(
+                $"'{GitConnectorConfig.RepositoryPathConfig}' does not exist: {_repositoryPath}");
         }
+
+        _repository = new Repository(_repositoryPath);
     }
 
     public override void Stop()

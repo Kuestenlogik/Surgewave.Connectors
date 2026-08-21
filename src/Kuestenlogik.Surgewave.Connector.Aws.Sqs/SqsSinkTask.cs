@@ -140,11 +140,22 @@ public sealed class SqsSinkTask : SinkTask
         for (var i = 0; i < entries.Count; i += batchSize)
         {
             var batch = entries.Skip(i).Take(batchSize).ToList();
-            await _sqsClient.SendMessageBatchAsync(new SendMessageBatchRequest
+            var response = await _sqsClient.SendMessageBatchAsync(new SendMessageBatchRequest
             {
                 QueueUrl = _queueUrl,
                 Entries = batch
             }, cancellationToken);
+
+            // SQS reports per-entry failures (throttling, oversize) without throwing -
+            // fail the flush so the worker can retry instead of silently dropping them
+            if (response.Failed is { Count: > 0 })
+            {
+                var details = string.Join("; ", response.Failed.Select(f => $"{f.Id}: {f.Code} {f.Message}"));
+                var error = new InvalidOperationException(
+                    $"SQS rejected {response.Failed.Count} of {batch.Count} messages: {details}");
+                Context?.RaiseError?.Invoke(error);
+                throw error;
+            }
         }
     }
 

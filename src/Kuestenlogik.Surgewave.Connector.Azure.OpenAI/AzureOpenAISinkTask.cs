@@ -32,6 +32,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
     private string _embeddingsField = AzureOpenAIConnectorConfig.DefaultEmbeddingsField;
     private bool _includeOriginal = AzureOpenAIConnectorConfig.DefaultIncludeOriginal;
     private string _outputFormat = AzureOpenAIConnectorConfig.FormatMerge;
+    private string? _outputTopic;
     private string? _webhookUrl;
     private int _batchSize = AzureOpenAIConnectorConfig.DefaultBatchSize;
     private int _batchTimeoutMs = AzureOpenAIConnectorConfig.DefaultBatchTimeoutMs;
@@ -155,6 +156,10 @@ public sealed class AzureOpenAISinkTask : SinkTask
             ? outputFormat
             : AzureOpenAIConnectorConfig.FormatMerge;
 
+        _outputTopic = config.TryGetValue(AzureOpenAIConnectorConfig.OutputTopicConfig, out var outputTopic) && !string.IsNullOrEmpty(outputTopic)
+            ? outputTopic
+            : null;
+
         _webhookUrl = config.TryGetValue(AzureOpenAIConnectorConfig.WebhookUrlConfig, out var webhookUrl) && !string.IsNullOrEmpty(webhookUrl)
             ? webhookUrl
             : null;
@@ -201,6 +206,13 @@ public sealed class AzureOpenAISinkTask : SinkTask
         }
     }
 
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the buffer before the worker commits offsets - otherwise buffered
+        // records would be acknowledged while still sitting in memory
+        await FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _client == null) return;
@@ -235,6 +247,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
         foreach (var record in records)
         {
+            JsonObject? output = null;
             try
             {
                 var inputText = ExtractInputText(record);
@@ -274,12 +287,17 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
                 if (responseText == null) continue;
 
-                var output = BuildOutput(record, responseText, null, null, null);
-                await OutputResultAsync(output, cancellationToken);
+                output = BuildOutput(record, responseText, null, null, null);
             }
             catch (Exception ex)
             {
                 Context.RaiseError?.Invoke(ex);
+            }
+
+            if (output != null)
+            {
+                // Delivery failures propagate so the worker retries the batch
+                await OutputResultAsync(record, output, cancellationToken);
             }
         }
     }
@@ -292,6 +310,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
         foreach (var record in records)
         {
+            JsonObject? output = null;
             try
             {
                 var inputText = ExtractInputText(record);
@@ -314,12 +333,17 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
                 if (embedding == null) continue;
 
-                var output = BuildOutput(record, null, embedding, null, null);
-                await OutputResultAsync(output, cancellationToken);
+                output = BuildOutput(record, null, embedding, null, null);
             }
             catch (Exception ex)
             {
                 Context.RaiseError?.Invoke(ex);
+            }
+
+            if (output != null)
+            {
+                // Delivery failures propagate so the worker retries the batch
+                await OutputResultAsync(record, output, cancellationToken);
             }
         }
     }
@@ -332,6 +356,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
         foreach (var record in records)
         {
+            JsonObject? output = null;
             try
             {
                 var prompt = ExtractInputText(record);
@@ -381,12 +406,17 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
                 if (imageUrls == null || imageUrls.Count == 0) continue;
 
-                var output = BuildOutput(record, null, null, imageUrls, null);
-                await OutputResultAsync(output, cancellationToken);
+                output = BuildOutput(record, null, null, imageUrls, null);
             }
             catch (Exception ex)
             {
                 Context.RaiseError?.Invoke(ex);
+            }
+
+            if (output != null)
+            {
+                // Delivery failures propagate so the worker retries the batch
+                await OutputResultAsync(record, output, cancellationToken);
             }
         }
     }
@@ -399,46 +429,40 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
         foreach (var record in records)
         {
+            JsonObject? output = null;
             try
             {
-                // Expect audio data in base64 or raw bytes
-                byte[]? audioData = null;
-                string? fileName = "audio.mp3";
+                if (record.Value == null || record.Value.Length == 0) continue;
 
-                if (record.Value is byte[] bytes)
+                // Raw record bytes are the audio payload unless a JSON envelope
+                // ({ "<input.field>": "<base64 audio>", "filename": "..." }) wraps it
+                var audioData = record.Value;
+                var fileName = "audio.mp3";
+
+                try
                 {
-                    audioData = bytes;
-                }
-                else if (record.Value != null)
-                {
-                    var valueStr = record.Value.ToString();
-                    if (!string.IsNullOrEmpty(valueStr))
+                    var valueStr = Encoding.UTF8.GetString(record.Value);
+                    using var doc = JsonDocument.Parse(valueStr);
+                    if (doc.RootElement.ValueKind == JsonValueKind.Object)
                     {
-                        try
+                        if (doc.RootElement.TryGetProperty(_inputField, out var field) && field.ValueKind == JsonValueKind.String)
                         {
-                            var doc = JsonDocument.Parse(valueStr);
-                            if (doc.RootElement.TryGetProperty(_inputField, out var field))
+                            var base64 = field.GetString();
+                            if (!string.IsNullOrEmpty(base64))
                             {
-                                var base64 = field.GetString();
-                                if (!string.IsNullOrEmpty(base64))
-                                {
-                                    audioData = Convert.FromBase64String(base64);
-                                }
-                            }
-                            if (doc.RootElement.TryGetProperty("filename", out var fnField))
-                            {
-                                fileName = fnField.GetString() ?? fileName;
+                                audioData = Convert.FromBase64String(base64);
                             }
                         }
-                        catch (JsonException)
+                        if (doc.RootElement.TryGetProperty("filename", out var fnField) && fnField.ValueKind == JsonValueKind.String)
                         {
-                            // Try as base64 directly
-                            audioData = Convert.FromBase64String(valueStr);
+                            fileName = fnField.GetString() ?? fileName;
                         }
                     }
                 }
-
-                if (audioData == null) continue;
+                catch (JsonException)
+                {
+                    // Not a JSON envelope - the record bytes are used as-is
+                }
 
                 string? transcription = null;
                 for (var attempt = 0; attempt <= _retryMax; attempt++)
@@ -472,12 +496,17 @@ public sealed class AzureOpenAISinkTask : SinkTask
 
                 if (transcription == null) continue;
 
-                var output = BuildOutput(record, null, null, null, transcription);
-                await OutputResultAsync(output, cancellationToken);
+                output = BuildOutput(record, null, null, null, transcription);
             }
             catch (Exception ex)
             {
                 Context.RaiseError?.Invoke(ex);
+            }
+
+            if (output != null)
+            {
+                // Delivery failures propagate so the worker retries the batch
+                await OutputResultAsync(record, output, cancellationToken);
             }
         }
     }
@@ -486,9 +515,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
     {
         if (record.Value == null) return null;
 
-        var valueStr = record.Value is byte[] bytes
-            ? Encoding.UTF8.GetString(bytes)
-            : record.Value.ToString();
+        var valueStr = Encoding.UTF8.GetString(record.Value);
 
         if (string.IsNullOrEmpty(valueStr)) return null;
 
@@ -518,9 +545,7 @@ public sealed class AzureOpenAISinkTask : SinkTask
             // Try to parse original value and merge
             if (record.Value != null)
             {
-                var valueStr = record.Value is byte[] bytes
-                    ? Encoding.UTF8.GetString(bytes)
-                    : record.Value.ToString();
+                var valueStr = Encoding.UTF8.GetString(record.Value);
 
                 if (!string.IsNullOrEmpty(valueStr))
                 {
@@ -589,18 +614,27 @@ public sealed class AzureOpenAISinkTask : SinkTask
         return output;
     }
 
-    private async Task OutputResultAsync(JsonObject output, CancellationToken cancellationToken)
+    private async Task OutputResultAsync(SinkRecord record, JsonObject output, CancellationToken cancellationToken)
     {
         var json = output.ToJsonString();
 
+        if (!string.IsNullOrEmpty(_outputTopic))
+        {
+            var producer = Context?.Producer
+                ?? throw new InvalidOperationException(
+                    $"'{AzureOpenAIConnectorConfig.OutputTopicConfig}' is configured but the Connect runtime provides no producer");
+            await producer.ProduceAsync(_outputTopic, record.Key, Encoding.UTF8.GetBytes(json), cancellationToken);
+            return;
+        }
+
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            return;
         }
-        else
-        {
-            Console.WriteLine(json);
-        }
+
+        Console.WriteLine(json);
     }
 
     protected override void Dispose(bool disposing)

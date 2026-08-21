@@ -27,10 +27,6 @@ public static class OrleansConnectorConfig
     public const string BatchSize = "batch.size";
     public const int DefaultBatchSize = 100;
 
-    // Serialization
-    public const string SerializationType = "serialization.type";
-    public const string DefaultSerializationType = "json";
-
     // Publish
     public const string PublishTimeoutMs = "publish.timeout.ms";
     public const int DefaultPublishTimeoutMs = 30000;

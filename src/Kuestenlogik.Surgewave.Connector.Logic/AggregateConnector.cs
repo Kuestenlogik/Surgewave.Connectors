@@ -49,8 +49,12 @@ public sealed class AggregateConnector : SinkConnector
         _aggregateField = config.GetValueOrDefault(AggregateConfig.AggregateField, "") ?? "";
         _operation = (config.GetValueOrDefault(AggregateConfig.Operation, "count") ?? "count").ToLowerInvariant();
         _windowMs = int.TryParse(config.GetValueOrDefault(AggregateConfig.WindowMs, "60000"), out var w) ? w : 60000;
-        _outputTopic = config.GetValueOrDefault(AggregateConfig.OutputTopic, "")
-            ?? throw new ArgumentException("Output topic is required");
+        _outputTopic = config.GetValueOrDefault(AggregateConfig.OutputTopic, "") ?? "";
+
+        if (string.IsNullOrWhiteSpace(_outputTopic))
+        {
+            throw new ArgumentException("Output topic is required");
+        }
 
         var topics = config.GetValueOrDefault(AggregateConfig.Topics, "") ?? "";
         _inputTopics.AddRange(topics.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
@@ -136,9 +140,12 @@ public sealed class AggregateTask : SinkTask
         {
             await FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
         }
-        catch
+        catch (Exception ex)
         {
-            // Ignore flush errors
+            // Timer callbacks cannot propagate exceptions - surface the failure instead
+            // of silently discarding it. FlushAsync has already restored the window state.
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Aggregate window flush failed: {ex.Message}", ex));
         }
     }
 
@@ -177,23 +184,45 @@ public sealed class AggregateTask : SinkTask
             _states.Clear();
         }
 
-        foreach (var (groupKey, agg) in snapshot)
+        var pending = new Queue<KeyValuePair<string, AggregateState>>(snapshot);
+        try
         {
-            var result = ComputeResult(agg);
-
-            var output = new JsonObject
+            while (pending.Count > 0)
             {
-                ["group"] = groupKey,
-                ["operation"] = _operation,
-                ["result"] = result,
-                ["count"] = agg.Count,
-                ["window_end"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-            };
+                var (groupKey, agg) = pending.Peek();
+                var result = ComputeResult(agg);
 
-            var outputBytes = Encoding.UTF8.GetBytes(output.ToJsonString());
-            var keyBytes = Encoding.UTF8.GetBytes(groupKey);
+                var output = new JsonObject
+                {
+                    ["group"] = groupKey,
+                    ["operation"] = _operation,
+                    ["result"] = result,
+                    ["count"] = agg.Count,
+                    ["window_end"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                };
 
-            await Context.Producer.ProduceAsync(_outputTopic, keyBytes, outputBytes, cancellationToken);
+                var outputBytes = Encoding.UTF8.GetBytes(output.ToJsonString());
+                var keyBytes = Encoding.UTF8.GetBytes(groupKey);
+
+                await Context.Producer.ProduceAsync(_outputTopic, keyBytes, outputBytes, cancellationToken);
+                pending.Dequeue();
+            }
+        }
+        catch
+        {
+            // Producing failed - merge the unpublished aggregates back into the live
+            // window so the next flush retries them instead of losing them, then let
+            // the caller see the failure.
+            lock (_lock)
+            {
+                while (pending.Count > 0)
+                {
+                    var (groupKey, agg) = pending.Dequeue();
+                    _states.AddOrUpdate(groupKey, agg, (_, existing) => existing.Merge(agg));
+                }
+            }
+
+            throw;
         }
     }
 
@@ -279,6 +308,15 @@ public sealed class AggregateTask : SinkTask
                 Min = Math.Min(Min, value.Value);
                 Max = Math.Max(Max, value.Value);
             }
+        }
+
+        public AggregateState Merge(AggregateState other)
+        {
+            Count += other.Count;
+            Sum += other.Sum;
+            Min = Math.Min(Min, other.Min);
+            Max = Math.Max(Max, other.Max);
+            return this;
         }
     }
 }

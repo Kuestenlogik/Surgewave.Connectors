@@ -6,6 +6,12 @@ using Kuestenlogik.Surgewave.Plugins.Configuration;
 /// <summary>
 /// A source connector that applies batching policies to aggregate messages.
 /// Supports batching by message count, byte size, or timeout.
+/// <para>
+/// IMPORTANT: the task has no data source of its own — it must be embedded in a
+/// pipeline that feeds it via <see cref="BatchingSourceTask.AddMessage"/>. Deployed
+/// standalone it produces nothing; use <see cref="BatchingSinkConnector"/> with
+/// <c>batch.output.topic</c> for standalone topic-to-topic batching.
+/// </para>
 /// </summary>
 public sealed class BatchingSourceConnector : SourceConnector
 {

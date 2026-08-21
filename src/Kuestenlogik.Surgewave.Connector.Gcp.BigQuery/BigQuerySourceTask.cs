@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Google.Apis.Auth.OAuth2;
@@ -55,7 +56,22 @@ public sealed class BigQuerySourceTask : SourceTask
             [BigQueryConnectorConfig.OffsetTable] = _table
         };
 
+        RestoreOffset();
+
         _client = CreateClient(config);
+    }
+
+    private void RestoreOffset()
+    {
+        var storedOffset = Context?.OffsetStorageReader?.Offset(_sourcePartition);
+        if (storedOffset == null)
+            return;
+
+        if (storedOffset.TryGetValue(BigQueryConnectorConfig.OffsetTimestamp, out var timestamp) &&
+            DateTimeOffset.TryParse(timestamp?.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var restored))
+        {
+            _lastTimestamp = restored;
+        }
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
@@ -151,65 +167,62 @@ public sealed class BigQuerySourceTask : SourceTask
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"BigQuery poll error: {ex.Message}");
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
     }
 
     private string BuildQuery()
+        => BuildQuery(_mode, _query, _projectId, _dataset, _table, _timestampColumn, _lastTimestamp, _maxRowsPerPoll);
+
+    internal static string BuildQuery(
+        string mode,
+        string userQuery,
+        string projectId,
+        string dataset,
+        string table,
+        string timestampColumn,
+        DateTimeOffset? lastTimestamp,
+        int maxRowsPerPoll)
     {
-        if (_mode.Equals("query", StringComparison.OrdinalIgnoreCase))
+        if (mode.Equals("query", StringComparison.OrdinalIgnoreCase))
         {
-            var query = _query;
+            // Wrap the user query as a subquery so the incremental filter and the row limit
+            // never interfere with its own clauses (WHERE in subqueries, GROUP BY, LIMIT, ...)
+            var query = $"SELECT * FROM ({userQuery.Trim().TrimEnd(';').TrimEnd()})";
 
-            // Add timestamp filter if configured
-            if (!string.IsNullOrEmpty(_timestampColumn) && _lastTimestamp.HasValue)
+            if (!string.IsNullOrEmpty(timestampColumn) && lastTimestamp.HasValue)
             {
-                var whereClause = $" WHERE {_timestampColumn} > TIMESTAMP('{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.ffffff}')";
-
-                // Check if query already has WHERE
-                if (query.Contains(" WHERE ", StringComparison.OrdinalIgnoreCase))
-                {
-                    query = query.Replace(" WHERE ", $" WHERE {_timestampColumn} > TIMESTAMP('{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.ffffff}') AND ", StringComparison.OrdinalIgnoreCase);
-                }
-                else if (query.Contains(" GROUP BY ", StringComparison.OrdinalIgnoreCase))
-                {
-                    query = query.Replace(" GROUP BY ", $" {whereClause} GROUP BY ", StringComparison.OrdinalIgnoreCase);
-                }
-                else if (query.Contains(" ORDER BY ", StringComparison.OrdinalIgnoreCase))
-                {
-                    query = query.Replace(" ORDER BY ", $" {whereClause} ORDER BY ", StringComparison.OrdinalIgnoreCase);
-                }
-                else
-                {
-                    query += whereClause;
-                }
+                query += $" WHERE {timestampColumn} > {FormatTimestampLiteral(lastTimestamp.Value)}";
             }
 
-            return query + $" LIMIT {_maxRowsPerPoll}";
+            return query + $" LIMIT {maxRowsPerPoll}";
         }
         else
         {
             // Table mode
             var sb = new StringBuilder();
-            sb.Append($"SELECT * FROM `{_projectId}.{_dataset}.{_table}`");
+            sb.Append($"SELECT * FROM `{projectId}.{dataset}.{table}`");
 
-            if (!string.IsNullOrEmpty(_timestampColumn) && _lastTimestamp.HasValue)
+            if (!string.IsNullOrEmpty(timestampColumn) && lastTimestamp.HasValue)
             {
-                sb.Append($" WHERE {_timestampColumn} > TIMESTAMP('{_lastTimestamp.Value:yyyy-MM-dd HH:mm:ss.ffffff}')");
+                sb.Append($" WHERE {timestampColumn} > {FormatTimestampLiteral(lastTimestamp.Value)}");
             }
 
-            if (!string.IsNullOrEmpty(_timestampColumn))
+            if (!string.IsNullOrEmpty(timestampColumn))
             {
-                sb.Append($" ORDER BY {_timestampColumn}");
+                sb.Append($" ORDER BY {timestampColumn}");
             }
 
-            sb.Append($" LIMIT {_maxRowsPerPoll}");
+            sb.Append($" LIMIT {maxRowsPerPoll}");
 
             return sb.ToString();
         }
     }
+
+    private static string FormatTimestampLiteral(DateTimeOffset timestamp)
+        => $"TIMESTAMP('{timestamp.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture)}')";
 
     private async Task<List<Dictionary<string, object?>>> ExecuteQueryAsync(string sql, CancellationToken cancellationToken)
     {
@@ -271,7 +284,13 @@ public sealed class BigQuerySourceTask : SourceTask
         var sourceOffset = new Dictionary<string, object>();
         if (!string.IsNullOrEmpty(_timestampColumn) && row.TryGetValue(_timestampColumn, out var ts) && ts != null)
         {
-            sourceOffset[BigQueryConnectorConfig.OffsetTimestamp] = ts.ToString()!;
+            // Round-trippable so RestoreOffset can parse it back after a task restart
+            sourceOffset[BigQueryConnectorConfig.OffsetTimestamp] = ts switch
+            {
+                DateTime dt => new DateTimeOffset(dt, TimeSpan.Zero).ToString("O"),
+                DateTimeOffset dto => dto.ToString("O"),
+                _ => Convert.ToString(ts, CultureInfo.InvariantCulture)!
+            };
         }
 
         return new SourceRecord

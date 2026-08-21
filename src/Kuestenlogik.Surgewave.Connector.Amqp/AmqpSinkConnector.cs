@@ -36,6 +36,9 @@ public sealed class AmqpSinkConnector : SinkConnector
             "AMQP password")
         .Define(AmqpConnectorConfig.UseSsl, ConfigType.Boolean, "false", Importance.Medium,
             "Enable SSL/TLS")
+        .Define(AmqpConnectorConfig.RequestedHeartbeat, ConfigType.Int,
+            AmqpConnectorConfig.DefaultHeartbeatSeconds.ToString(), Importance.Low,
+            "Requested heartbeat interval in seconds")
         .Define(AmqpConnectorConfig.TargetExchange, ConfigType.String, "", Importance.High,
             "Exchange to publish to (empty = default exchange)")
         .Define(AmqpConnectorConfig.TargetRoutingKey, ConfigType.String, "", Importance.Medium,
@@ -48,10 +51,7 @@ public sealed class AmqpSinkConnector : SinkConnector
         .Define(AmqpConnectorConfig.ExchangeDurable, ConfigType.Boolean, "true", Importance.Medium,
             "Make exchange durable")
         .Define(AmqpConnectorConfig.Persistent, ConfigType.Boolean, "true", Importance.Medium,
-            "Make messages persistent")
-        .Define(AmqpConnectorConfig.BatchSize, ConfigType.Int,
-            AmqpConnectorConfig.DefaultBatchSize.ToString(), Importance.Medium,
-            "Batch size for confirms");
+            "Make messages persistent");
 
     public override Type TaskClass => typeof(AmqpSinkTask);
 

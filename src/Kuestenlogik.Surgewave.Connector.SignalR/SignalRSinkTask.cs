@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace Kuestenlogik.Surgewave.Connector.SignalR;
@@ -17,6 +18,7 @@ public sealed class SignalRSinkTask : SinkTask
     private string _user = "";
     private bool _batchEnabled;
     private int _batchSize = SignalRConfig.DefaultBatchSize;
+    private bool _batchMethodUnavailable;
     private readonly List<SinkRecord> _buffer = [];
 
     public override string Version => "1.0.0";
@@ -136,21 +138,30 @@ public sealed class SignalRSinkTask : SinkTask
         if (_buffer.Count == 0 || _connection == null)
             return;
 
-        // Try to send as batch first
-        var batchMethod = _method + "Batch";
-        var batchArgs = _buffer.Select(BuildMessageArgs).ToArray();
+        if (!_batchMethodUnavailable)
+        {
+            // Try to send as batch first
+            var batchMethod = _method + "Batch";
+            var batchArgs = _buffer.Select(BuildMessageArgs).ToArray();
 
-        try
-        {
-            await _connection.InvokeAsync(batchMethod, batchArgs, cancellationToken);
-        }
-        catch
-        {
-            // If batch method doesn't exist, send individually
-            foreach (var record in _buffer)
+            try
             {
-                await SendRecordAsync(record, cancellationToken);
+                await _connection.InvokeAsync(batchMethod, batchArgs, cancellationToken);
+                _buffer.Clear();
+                return;
             }
+            catch (HubException ex) when (ex.Message.Contains("Unknown hub method", StringComparison.OrdinalIgnoreCase))
+            {
+                // The hub has no batch method — fall back to individual sends from now on.
+                // Any other failure propagates so the worker retries or dead-letters the
+                // batch instead of blindly resending records the server may already hold.
+                _batchMethodUnavailable = true;
+            }
+        }
+
+        foreach (var record in _buffer)
+        {
+            await SendRecordAsync(record, cancellationToken);
         }
 
         _buffer.Clear();

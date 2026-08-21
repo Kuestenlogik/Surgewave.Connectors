@@ -16,6 +16,7 @@ public sealed class SignalRSourceTask : SourceTask
     private HubConnection? _connection;
     private string _topic = "";
     private string _method = SignalRConfig.DefaultMethod;
+    private string _messageFormat = SignalRConfig.DefaultMessageFormat;
     private readonly Channel<SourceRecord> _recordChannel = Channel.CreateBounded<SourceRecord>(
         new BoundedChannelOptions(10000)
         {
@@ -41,6 +42,14 @@ public sealed class SignalRSourceTask : SourceTask
         if (config.TryGetValue(SignalRConfig.Method, out var method) && !string.IsNullOrEmpty(method))
         {
             _method = method;
+        }
+
+        _messageFormat = (config.GetValueOrDefault(SignalRConfig.MessageFormat) ?? SignalRConfig.DefaultMessageFormat)
+            .ToLowerInvariant();
+        if (_messageFormat is not ("key-value" or "value-only" or "json"))
+        {
+            throw new ArgumentException(
+                $"Unsupported {SignalRConfig.MessageFormat}: '{_messageFormat}'. Supported values: key-value, value-only, json");
         }
 
         var reconnectEnabled = !config.TryGetValue(SignalRConfig.ReconnectEnabled, out var reconnectStr) ||
@@ -100,60 +109,47 @@ public sealed class SignalRSourceTask : SourceTask
 
         _connection = builder.Build();
 
-        // Subscribe to the hub method - handle different argument counts
-        _subscription = _connection.On<string, string>(_method, (key, value) =>
+        // The SignalR client binds a hub method's arguments against a single handler
+        // signature — registering several arities for the same method would drop or
+        // duplicate messages. Register exactly one handler for the configured shape.
+        _subscription = _messageFormat switch
         {
-            var msgId = Interlocked.Increment(ref _messageCount);
-            var record = new SourceRecord
-            {
-                SourcePartition = new Dictionary<string, object> { ["hub"] = hubUrl, ["method"] = _method },
-                SourceOffset = new Dictionary<string, object> { ["messageId"] = msgId },
-                Topic = _topic,
-                Key = string.IsNullOrEmpty(key) ? null : Encoding.UTF8.GetBytes(key),
-                Value = Encoding.UTF8.GetBytes(value),
-                Timestamp = DateTimeOffset.UtcNow
-            };
-
-            _recordChannel.Writer.TryWrite(record);
-        });
-
-        // Also handle single-argument messages
-        _connection.On<string>(_method, value =>
-        {
-            var msgId = Interlocked.Increment(ref _messageCount);
-            var record = new SourceRecord
-            {
-                SourcePartition = new Dictionary<string, object> { ["hub"] = hubUrl, ["method"] = _method },
-                SourceOffset = new Dictionary<string, object> { ["messageId"] = msgId },
-                Topic = _topic,
-                Key = null,
-                Value = Encoding.UTF8.GetBytes(value),
-                Timestamp = DateTimeOffset.UtcNow
-            };
-
-            _recordChannel.Writer.TryWrite(record);
-        });
-
-        // Handle JSON messages
-        _connection.On<object>(_method, obj =>
-        {
-            var msgId = Interlocked.Increment(ref _messageCount);
-            var value = obj is string s ? s : JsonSerializer.Serialize(obj);
-            var record = new SourceRecord
-            {
-                SourcePartition = new Dictionary<string, object> { ["hub"] = hubUrl, ["method"] = _method },
-                SourceOffset = new Dictionary<string, object> { ["messageId"] = msgId },
-                Topic = _topic,
-                Key = null,
-                Value = Encoding.UTF8.GetBytes(value),
-                Timestamp = DateTimeOffset.UtcNow
-            };
-
-            _recordChannel.Writer.TryWrite(record);
-        });
+            "key-value" => _connection.On<string, string>(_method, (key, value) =>
+                EnqueueAsync(hubUrl, string.IsNullOrEmpty(key) ? null : key, value)),
+            "value-only" => _connection.On<string>(_method, value =>
+                EnqueueAsync(hubUrl, null, value)),
+            "json" => _connection.On<object>(_method, obj =>
+                EnqueueAsync(hubUrl, null, obj is string s ? s : JsonSerializer.Serialize(obj))),
+            _ => throw new InvalidOperationException($"Unreachable message format '{_messageFormat}'")
+        };
 
         // Start connection synchronously
         _connection.StartAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task EnqueueAsync(string hubUrl, string? key, string value)
+    {
+        var msgId = Interlocked.Increment(ref _messageCount);
+        var record = new SourceRecord
+        {
+            SourcePartition = new Dictionary<string, object> { ["hub"] = hubUrl, ["method"] = _method },
+            SourceOffset = new Dictionary<string, object> { ["messageId"] = msgId },
+            Topic = _topic,
+            Key = key == null ? null : Encoding.UTF8.GetBytes(key),
+            Value = Encoding.UTF8.GetBytes(value),
+            Timestamp = DateTimeOffset.UtcNow
+        };
+
+        try
+        {
+            // WriteAsync applies backpressure when the bounded buffer is full —
+            // TryWrite would silently drop messages (Wait mode only affects WriteAsync).
+            await _recordChannel.Writer.WriteAsync(record);
+        }
+        catch (ChannelClosedException)
+        {
+            // Task is stopping — the buffer no longer accepts messages
+        }
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

@@ -131,10 +131,18 @@ public sealed class GrokSinkTask : SinkTask
 
     public override void Stop()
     {
-        // Flush any remaining records
+        // Flush any remaining records (best effort - shutdown must not throw;
+        // undelivered records were not offset-committed and will be redelivered)
         if (_buffer.Count > 0)
         {
-            FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            try
+            {
+                FlushBufferAsync(CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Context?.RaiseError?.Invoke(ex);
+            }
         }
 
         _chatClient = null;
@@ -151,6 +159,13 @@ public sealed class GrokSinkTask : SinkTask
         {
             await FlushBufferAsync(cancellationToken);
         }
+    }
+
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the buffer before the worker commits consumer offsets - otherwise
+        // buffered records would count as delivered and be lost on restart/rebalance.
+        await FlushBufferAsync(cancellationToken);
     }
 
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
@@ -221,9 +236,17 @@ public sealed class GrokSinkTask : SinkTask
                 // Send to webhook or log
                 await OutputResultAsync(output, cancellationToken);
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
+                // Surface and rethrow: a failed completion or webhook delivery must
+                // fail the put/flush so the worker retries/DLQs instead of silently
+                // acknowledging the record.
                 Context.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }
@@ -308,15 +331,16 @@ public sealed class GrokSinkTask : SinkTask
 
     private async Task OutputResultAsync(JsonObject output, CancellationToken cancellationToken)
     {
-        var json = output.ToJsonString();
-
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            // A non-success response means the result was NOT delivered - throw so
+            // the failure propagates instead of silently losing the result.
+            using var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            response.EnsureSuccessStatusCode();
         }
         else
         {
-            Console.WriteLine(json);
+            Console.WriteLine(output.ToJsonString());
         }
     }
 

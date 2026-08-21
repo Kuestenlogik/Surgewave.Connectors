@@ -108,10 +108,10 @@ public sealed class OrleansSinkTask : SinkTask
             {
                 try
                 {
-                    using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeoutCts.CancelAfter(_publishTimeoutMs);
-
-                    await _stream.OnNextAsync(record.Value);
+                    // OnNextAsync accepts no cancellation token, so publish.timeout.ms is
+                    // enforced by abandoning the publish once the timeout elapses.
+                    await _stream.OnNextAsync(record.Value)
+                        .WaitAsync(TimeSpan.FromMilliseconds(_publishTimeoutMs), cancellationToken);
                     lastException = null;
                     break;
                 }

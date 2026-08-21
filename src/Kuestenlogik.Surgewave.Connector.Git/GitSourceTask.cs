@@ -30,6 +30,9 @@ public sealed class GitSourceTask : SourceTask
     private int _pollIntervalMs = GitConnectorConfig.DefaultPollIntervalMs;
     private int _maxCommitsPerPoll = GitConnectorConfig.DefaultMaxCommitsPerPoll;
     private bool _includeFileContents;
+    private string _remote = GitConnectorConfig.DefaultRemote;
+    private string _username = "";
+    private string _password = "";
     private Regex? _filePattern;
     private Regex? _excludePattern;
 
@@ -56,6 +59,10 @@ public sealed class GitSourceTask : SourceTask
             ? int.Parse(max) : GitConnectorConfig.DefaultMaxCommitsPerPoll;
         _includeFileContents = config.TryGetValue(GitConnectorConfig.IncludeFileContentsConfig, out var inc)
             && bool.Parse(inc);
+        _remote = config.TryGetValue(GitConnectorConfig.RemoteConfig, out var remote)
+            ? remote : GitConnectorConfig.DefaultRemote;
+        _username = config.TryGetValue(GitConnectorConfig.UsernameConfig, out var user) ? user : "";
+        _password = config.TryGetValue(GitConnectorConfig.PasswordConfig, out var pass) ? pass : "";
 
         // Compile file patterns
         if (config.TryGetValue(GitConnectorConfig.FilePatternConfig, out var pattern) &&
@@ -119,6 +126,9 @@ public sealed class GitSourceTask : SourceTask
                 _repository = new Repository(_repositoryPath);
             }
 
+            // Fetch new commits from the configured remote (best effort)
+            FetchFromRemote();
+
             // Get the branch
             var branchRef = _repository.Branches[_branch] ??
                            _repository.Branches[$"origin/{_branch}"] ??
@@ -171,15 +181,51 @@ public sealed class GitSourceTask : SourceTask
             _lastPollTime = DateTimeOffset.UtcNow;
             return records;
         }
-        catch (RepositoryNotFoundException)
+        catch (RepositoryNotFoundException ex)
         {
+            Context?.RaiseError?.Invoke(ex);
             await Task.Delay(5000, cancellationToken);
             return [];
         }
-        catch (LibGit2SharpException)
+        catch (LibGit2SharpException ex)
         {
+            Context?.RaiseError?.Invoke(ex);
             await Task.Delay(5000, cancellationToken);
             return [];
+        }
+    }
+
+    private void FetchFromRemote()
+    {
+        if (_repository == null)
+            return;
+
+        var remote = _repository.Network.Remotes[_remote];
+        if (remote == null)
+            return;
+
+        var options = new FetchOptions();
+
+        if (!string.IsNullOrWhiteSpace(_username) && !string.IsNullOrWhiteSpace(_password))
+        {
+            options.CredentialsProvider = (_, _, _) =>
+                new UsernamePasswordCredentials
+                {
+                    Username = _username,
+                    Password = _password
+                };
+        }
+
+        var refSpecs = remote.FetchRefSpecs.Select(r => r.Specification).ToList();
+
+        try
+        {
+            Commands.Fetch(_repository, _remote, refSpecs, options, "");
+        }
+        catch (LibGit2SharpException ex)
+        {
+            // Fetch is best effort - keep reading the local repository, but surface the failure
+            Context?.RaiseError?.Invoke(ex);
         }
     }
 

@@ -92,13 +92,15 @@ public sealed class CosmosDbSourceTask : SourceTask
 
     private void InitializeChangeFeedIterator()
     {
-        ChangeFeedStartFrom startFrom = _startFrom switch
-        {
-            CosmosDbConnectorConfig.StartFromBeginning => ChangeFeedStartFrom.Beginning(),
-            CosmosDbConnectorConfig.StartFromContinuation when !string.IsNullOrEmpty(_continuationToken)
-                => ChangeFeedStartFrom.ContinuationToken(_continuationToken),
-            _ => ChangeFeedStartFrom.Now()
-        };
+        // A live continuation token always wins, so a rebuilt iterator resumes where the
+        // previous one stopped instead of replaying the feed from the configured start
+        ChangeFeedStartFrom startFrom = !string.IsNullOrEmpty(_continuationToken)
+            ? ChangeFeedStartFrom.ContinuationToken(_continuationToken)
+            : _startFrom switch
+            {
+                CosmosDbConnectorConfig.StartFromBeginning => ChangeFeedStartFrom.Beginning(),
+                _ => ChangeFeedStartFrom.Now()
+            };
 
         var options = new ChangeFeedRequestOptions
         {

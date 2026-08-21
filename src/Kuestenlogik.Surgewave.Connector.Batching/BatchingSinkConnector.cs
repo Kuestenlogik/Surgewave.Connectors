@@ -19,6 +19,9 @@ public sealed class BatchingSinkConnector : SinkConnector
         // Topics
         .Define(BatchingConnectorConfig.TopicsConfig, ConfigType.String, Importance.High,
             "Comma-separated list of topics to consume", EditorHint.Topic)
+        // Output topic
+        .Define(BatchingConnectorConfig.OutputTopicConfig, ConfigType.String, "", Importance.High,
+            "Topic completed batches are published to (required for standalone deployment; leave empty only when embedding the task and consuming batches via OnBatchReady/GetBatches)", EditorHint.Topic)
         // Batching policy
         .Define(BatchingConnectorConfig.BatchMaxMessagesConfig, ConfigType.Int, (long)BatchingConnectorConfig.DefaultBatchMaxMessages, Importance.High,
             "Maximum number of messages per batch")

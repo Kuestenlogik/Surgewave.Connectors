@@ -73,6 +73,26 @@ public sealed class VertexAISinkTaskTests
     }
 
     [Fact]
+    public void VertexAISinkTask_OverridesFlushAsync_ToDrainBufferedRecords()
+    {
+        // The worker commits offsets right after FlushAsync - a buffered sink must
+        // drain its buffer there, not only when the batch size is reached
+        var flushAsync = typeof(VertexAISinkTask).GetMethod(nameof(SinkTask.FlushAsync));
+
+        Assert.NotNull(flushAsync);
+        Assert.Equal(typeof(VertexAISinkTask), flushAsync!.DeclaringType);
+    }
+
+    [Fact]
+    public async Task VertexAISinkTask_FlushAsync_CompletesWithEmptyBufferBeforeStart()
+    {
+        using var task = new VertexAISinkTask();
+        task.Initialize(CreateTaskContext());
+
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+    }
+
+    [Fact]
     public void VertexAIConnectorConfig_HasCorrectProjectIdConfig()
     {
         Assert.Equal("gcp.project.id", VertexAIConnectorConfig.ProjectIdConfig);

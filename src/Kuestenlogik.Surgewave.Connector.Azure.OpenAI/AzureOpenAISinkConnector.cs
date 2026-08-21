@@ -27,8 +27,10 @@ public sealed class AzureOpenAISinkConnector : SinkConnector
         .Define(AzureOpenAIConnectorConfig.TopicsConfig, ConfigType.String, Importance.High,
             "Comma-separated list of input topics to consume", EditorHint.Topic)
         // Output
+        .Define(AzureOpenAIConnectorConfig.OutputTopicConfig, ConfigType.String, "", Importance.Medium,
+            "Topic to produce results to (preferred over webhook; requires the Connect runtime producer)", EditorHint.Topic)
         .Define(AzureOpenAIConnectorConfig.WebhookUrlConfig, ConfigType.String, "", Importance.Medium,
-            "Webhook URL to POST results (optional, logs to console if not set)")
+            "Webhook URL to POST results (optional, logs to console if neither output topic nor webhook is set)")
         // Mode
         .Define(AzureOpenAIConnectorConfig.ModeConfig, ConfigType.String, AzureOpenAIConnectorConfig.ModeChat, Importance.High,
             "Processing mode: 'chat', 'embeddings', 'dalle', or 'whisper'", EditorHint.Select, options: ["chat", "embeddings", "dalle", "whisper"])

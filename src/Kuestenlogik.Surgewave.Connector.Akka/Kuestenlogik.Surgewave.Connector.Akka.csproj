@@ -10,10 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Akka" />
-    <PackageReference Include="Akka.Cluster" />
-    <PackageReference Include="Akka.Cluster.Tools" />
     <PackageReference Include="Akka.Remote" />
-    <PackageReference Include="Akka.Streams" />
   </ItemGroup>
 
   <ItemGroup>

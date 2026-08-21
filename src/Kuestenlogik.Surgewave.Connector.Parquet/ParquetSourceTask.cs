@@ -33,6 +33,7 @@ public sealed class ParquetSourceTask : SourceTask
     private bool _endOfFile;
 
     private readonly Dictionary<string, object> _sourcePartition = new();
+    private readonly Queue<string> _pendingPostReadActions = new();
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -228,19 +229,37 @@ public sealed class ParquetSourceTask : SourceTask
         var filePath = _currentFilePath;
         CloseCurrentFile();
 
-        if (_deleteAfterRead && File.Exists(filePath))
+        // Defer destructive post-read actions until the records have been produced and
+        // committed (CommitAsync) — deleting or moving the file here would lose the data
+        // permanently if the produce fails after the file is already gone.
+        if (_deleteAfterRead || _moveAfterRead)
         {
-            File.Delete(filePath);
+            _pendingPostReadActions.Enqueue(filePath);
         }
-        else if (_moveAfterRead && !string.IsNullOrEmpty(_processedDirectory))
-        {
-            if (!Directory.Exists(_processedDirectory))
-                Directory.CreateDirectory(_processedDirectory);
+    }
 
-            var fileName = Path.GetFileName(filePath);
-            var destPath = Path.Combine(_processedDirectory, fileName);
-            File.Move(filePath, destPath, overwrite: true);
+    public override Task CommitAsync(CancellationToken cancellationToken)
+    {
+        while (_pendingPostReadActions.Count > 0)
+        {
+            var filePath = _pendingPostReadActions.Dequeue();
+
+            if (_deleteAfterRead && File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+            else if (_moveAfterRead && !string.IsNullOrEmpty(_processedDirectory) && File.Exists(filePath))
+            {
+                if (!Directory.Exists(_processedDirectory))
+                    Directory.CreateDirectory(_processedDirectory);
+
+                var fileName = Path.GetFileName(filePath);
+                var destPath = Path.Combine(_processedDirectory, fileName);
+                File.Move(filePath, destPath, overwrite: true);
+            }
         }
+
+        return Task.CompletedTask;
     }
 
     private void CloseCurrentFile()

@@ -30,15 +30,12 @@ public sealed class OrleansSinkConnector : SinkConnector
             "Orleans service identifier")
         .Define(OrleansConnectorConfig.StreamProvider, ConfigType.String,
             OrleansConnectorConfig.DefaultStreamProvider, Importance.Medium,
-            "Orleans stream provider name")
+            "Orleans memory stream provider name (memory streams are the only supported provider)")
         .Define(OrleansConnectorConfig.StreamNamespace, ConfigType.String, Importance.High,
             "Orleans stream namespace")
         .Define(OrleansConnectorConfig.StreamId, ConfigType.String,
             "", Importance.Medium,
             "Orleans stream GUID (derived from topic name if not provided)")
-        .Define(OrleansConnectorConfig.SerializationType, ConfigType.String,
-            OrleansConnectorConfig.DefaultSerializationType, Importance.Low,
-            "Serialization type: json or binary")
         .Define(OrleansConnectorConfig.PublishTimeoutMs, ConfigType.Int,
             OrleansConnectorConfig.DefaultPublishTimeoutMs, Importance.Low,
             "Publish timeout in milliseconds")

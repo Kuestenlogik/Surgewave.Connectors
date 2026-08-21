@@ -27,48 +27,6 @@ public class AkkaConnectorConfigTests
     }
 
     [Fact]
-    public void ModeConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.mode", AkkaConnectorConfig.ModeConfig);
-    }
-
-    [Fact]
-    public void ClusterSeedNodesConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.cluster.seed.nodes", AkkaConnectorConfig.ClusterSeedNodesConfig);
-    }
-
-    [Fact]
-    public void ClusterPublishTopicConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.cluster.publish.topic", AkkaConnectorConfig.ClusterPublishTopicConfig);
-    }
-
-    [Fact]
-    public void ClusterSubscribeTopicConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.cluster.subscribe.topic", AkkaConnectorConfig.ClusterSubscribeTopicConfig);
-    }
-
-    [Fact]
-    public void StreamBufferSizeConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.stream.buffer.size", AkkaConnectorConfig.StreamBufferSizeConfig);
-    }
-
-    [Fact]
-    public void StreamOverflowStrategyConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.stream.overflow.strategy", AkkaConnectorConfig.StreamOverflowStrategyConfig);
-    }
-
-    [Fact]
-    public void StreamParallelismConfig_HasExpectedValue()
-    {
-        Assert.Equal("akka.stream.parallelism", AkkaConnectorConfig.StreamParallelismConfig);
-    }
-
-    [Fact]
     public void TopicPatternConfig_HasExpectedValue()
     {
         Assert.Equal("akka.topic.pattern", AkkaConnectorConfig.TopicPatternConfig);
@@ -90,12 +48,6 @@ public class AkkaConnectorConfigTests
     public void DefaultActorSystemName_HasExpectedValue()
     {
         Assert.Equal("surgewave-connect", AkkaConnectorConfig.DefaultActorSystemName);
-    }
-
-    [Fact]
-    public void DefaultMode_HasExpectedValue()
-    {
-        Assert.Equal("actor", AkkaConnectorConfig.DefaultMode);
     }
 
     [Fact]
@@ -138,24 +90,6 @@ public class AkkaConnectorConfigTests
     public void DefaultRetryDelayMs_HasExpectedValue()
     {
         Assert.Equal(1000L, AkkaConnectorConfig.DefaultRetryDelayMs);
-    }
-
-    [Fact]
-    public void DefaultStreamBufferSize_HasExpectedValue()
-    {
-        Assert.Equal(1024, AkkaConnectorConfig.DefaultStreamBufferSize);
-    }
-
-    [Fact]
-    public void DefaultOverflowStrategy_HasExpectedValue()
-    {
-        Assert.Equal("backpressure", AkkaConnectorConfig.DefaultOverflowStrategy);
-    }
-
-    [Fact]
-    public void DefaultStreamParallelism_HasExpectedValue()
-    {
-        Assert.Equal(4, AkkaConnectorConfig.DefaultStreamParallelism);
     }
 
     [Fact]

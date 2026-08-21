@@ -9,7 +9,9 @@ using Kuestenlogik.Surgewave.Connect;
 namespace Kuestenlogik.Surgewave.Connector.Google.Home;
 
 /// <summary>
-/// Task that controls Google Home smart home devices.
+/// Task that reports smart home device state into the Google Home Graph
+/// (ReportStateAndNotification). Note: the Home Graph API only updates Google's
+/// state cache - it cannot actuate devices.
 /// </summary>
 public sealed class GoogleHomeSinkTask : SinkTask
 {
@@ -89,9 +91,22 @@ public sealed class GoogleHomeSinkTask : SinkTask
 
                 await _service!.Devices.ReportStateAndNotification(request).ExecuteAsync(cancellationToken);
             }
-            catch (Exception)
+            catch (OperationCanceledException)
             {
-                // Log and continue
+                throw;
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                // Poison record (unparseable or malformed payload): skip it, but
+                // surface it instead of silently dropping the record.
+                Context?.RaiseError?.Invoke(ex);
+            }
+            catch (Exception ex)
+            {
+                // API failure: surface and rethrow so the worker retries/DLQs the
+                // record instead of acknowledging it as delivered.
+                Context?.RaiseError?.Invoke(ex);
+                throw;
             }
         }
     }

@@ -8,6 +8,9 @@ public static class BatchingConnectorConfig
     // Topics
     public const string TopicsConfig = "topics";
 
+    // Output topic the sink publishes completed batches to
+    public const string OutputTopicConfig = "batch.output.topic";
+
     // Batching policy
     public const string BatchMaxMessagesConfig = "batch.max.messages";
     public const int DefaultBatchMaxMessages = 100;

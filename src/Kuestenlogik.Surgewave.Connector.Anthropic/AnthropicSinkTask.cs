@@ -14,7 +14,6 @@ using Kuestenlogik.Surgewave.Connect;
 public sealed class AnthropicSinkTask : SinkTask
 {
     private AnthropicClient? _client;
-    private string _mode = AnthropicConnectorConfig.ModeCompletions;
     private string _model = AnthropicConnectorConfig.DefaultModel;
     private string _systemPrompt = "";
     private int _maxTokens = AnthropicConnectorConfig.DefaultMaxTokens;
@@ -57,10 +56,13 @@ public sealed class AnthropicSinkTask : SinkTask
             oldClient.Dispose();
         }
 
-        // Read mode config
-        _mode = config.TryGetValue(AnthropicConnectorConfig.ModeConfig, out var mode)
-            ? mode
+        // Validate mode config ('completions' is the only supported mode)
+        var mode = config.TryGetValue(AnthropicConnectorConfig.ModeConfig, out var m)
+            ? m
             : AnthropicConnectorConfig.ModeCompletions;
+
+        if (mode is not AnthropicConnectorConfig.ModeCompletions)
+            throw new ArgumentException($"Invalid mode '{mode}'. Must be '{AnthropicConnectorConfig.ModeCompletions}'");
 
         // Read completions config
         _model = config.TryGetValue(AnthropicConnectorConfig.ModelConfig, out var model)
@@ -155,6 +157,13 @@ public sealed class AnthropicSinkTask : SinkTask
         {
             await FlushBufferAsync(cancellationToken);
         }
+    }
+
+    public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the batch buffer before the worker commits consumer offsets so
+        // buffered records are never acknowledged unprocessed.
+        return FlushBufferAsync(cancellationToken);
     }
 
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
@@ -339,15 +348,16 @@ public sealed class AnthropicSinkTask : SinkTask
 
     private async Task OutputResultAsync(JsonObject output, CancellationToken cancellationToken)
     {
-        var json = output.ToJsonString();
-
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            // A rejected webhook delivery must fail the record instead of being
+            // silently discarded after a paid completion.
+            using var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            response.EnsureSuccessStatusCode();
         }
         else
         {
-            Console.WriteLine(json);
+            Console.WriteLine(output.ToJsonString());
         }
     }
 

@@ -22,7 +22,7 @@ public sealed class GitSinkConnector : SinkConnector
         .Define(GitConnectorConfig.BranchConfig, ConfigType.String, GitConnectorConfig.DefaultBranch, Importance.Medium,
             "Branch to commit to")
         .Define(GitConnectorConfig.OutputModeConfig, ConfigType.String, GitConnectorConfig.DefaultOutputMode, Importance.Medium,
-            "Output mode: 'write' (overwrite files) or 'append' (append to files)", EditorHint.Select, options: ["file", "branch"])
+            "Output mode: 'write' (overwrite files) or 'append' (append to files)", EditorHint.Select, options: [GitConnectorConfig.OutputModeWrite, GitConnectorConfig.OutputModeAppend])
         .Define(GitConnectorConfig.OutputPathConfig, ConfigType.String, "", Importance.Medium,
             "Output path template (supports ${topic}, ${key}, ${timestamp})", EditorHint.FilePath)
         .Define(GitConnectorConfig.FilePathFieldConfig, ConfigType.String, "path", Importance.Medium,
@@ -48,11 +48,7 @@ public sealed class GitSinkConnector : SinkConnector
         .Define(GitConnectorConfig.UsernameConfig, ConfigType.String, "", Importance.Low,
             "Username for remote authentication")
         .Define(GitConnectorConfig.PasswordConfig, ConfigType.Password, "", Importance.Low,
-            "Password or token for remote authentication")
-        .Define(GitConnectorConfig.SshKeyPathConfig, ConfigType.String, "", Importance.Low,
-            "Path to SSH private key file")
-        .Define(GitConnectorConfig.SshKeyPassphraseConfig, ConfigType.Password, "", Importance.Low,
-            "Passphrase for SSH private key");
+            "Password or token for remote authentication");
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -68,6 +64,14 @@ public sealed class GitSinkConnector : SinkConnector
             string.IsNullOrWhiteSpace(repoPath))
         {
             throw new ArgumentException($"Missing required config: {GitConnectorConfig.RepositoryPathConfig}");
+        }
+
+        if (config.TryGetValue(GitConnectorConfig.SshKeyPathConfig, out var sshKeyPath) &&
+            !string.IsNullOrWhiteSpace(sshKeyPath))
+        {
+            throw new ArgumentException(
+                $"'{GitConnectorConfig.SshKeyPathConfig}' is not supported: SSH authentication is not available. " +
+                $"Use '{GitConnectorConfig.UsernameConfig}'/'{GitConnectorConfig.PasswordConfig}' with an HTTPS remote instead.");
         }
     }
 

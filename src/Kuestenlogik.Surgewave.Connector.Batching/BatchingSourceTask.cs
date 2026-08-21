@@ -8,7 +8,13 @@ using Kuestenlogik.Surgewave.Connect;
 
 /// <summary>
 /// A source task that aggregates messages into batches based on count, size, or timeout.
-/// This is typically used as part of a pipeline to batch messages from an upstream source.
+/// <para>
+/// IMPORTANT: this task has no data source of its own — it only batches messages that a
+/// host feeds in via <see cref="AddMessage"/>. It is meant to be embedded in a pipeline;
+/// deployed as a standalone source connector it will never produce anything.
+/// Use the batching SINK connector (with <c>batch.output.topic</c>) to batch records
+/// between two topics standalone.
+/// </para>
 /// </summary>
 public sealed class BatchingSourceTask : SourceTask
 {
@@ -74,12 +80,20 @@ public sealed class BatchingSourceTask : SourceTask
         _lastKey = null;
     }
 
-    public override Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
+    public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
     {
         // This source task is designed to be used in a pipeline where
         // messages are added via the AddMessage method. The PollAsync
         // method checks if the batch is ready to be flushed.
         var records = new List<SourceRecord>();
+
+        if (!ShouldFlushBatch())
+        {
+            // Pace the poll loop instead of busy-spinning while the batch fills up
+            // (or, in a standalone deployment, while no messages arrive at all).
+            var delayMs = Math.Clamp(_batchTimeoutMs, 10, 100);
+            await Task.Delay(delayMs, cancellationToken);
+        }
 
         if (ShouldFlushBatch())
         {
@@ -89,7 +103,7 @@ public sealed class BatchingSourceTask : SourceTask
             ResetBatch();
         }
 
-        return Task.FromResult<IReadOnlyList<SourceRecord>>(records);
+        return records;
     }
 
     /// <summary>

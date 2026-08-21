@@ -227,6 +227,12 @@ public sealed class FirestoreSourceTask : SourceTask
             {
                 query = query.WhereGreaterThan(_timestampField, Timestamp.FromDateTimeOffset(_lastPollTimestamp));
             }
+            else if (string.IsNullOrEmpty(_timestampField) && string.IsNullOrEmpty(_orderByField) && !string.IsNullOrEmpty(_lastDocumentId))
+            {
+                // Without a timestamp field, page forward by document id so the same
+                // first N documents are not re-emitted on every poll
+                query = query.OrderBy(FieldPath.DocumentId).StartAfter(_lastDocumentId);
+            }
 
             var snapshot = await query.GetSnapshotAsync(cancellationToken);
 

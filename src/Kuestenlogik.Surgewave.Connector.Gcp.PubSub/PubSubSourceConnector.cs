@@ -31,9 +31,9 @@ public sealed class PubSubSourceConnector : SourceConnector
         .Define(PubSubConnectorConfig.MaxMessagesConfig, ConfigType.Int, (long)PubSubConnectorConfig.DefaultMaxMessages, Importance.Medium,
             "Maximum messages to pull per request")
         .Define(PubSubConnectorConfig.AckDeadlineSecondsConfig, ConfigType.Int, (long)PubSubConnectorConfig.DefaultAckDeadlineSeconds, Importance.Medium,
-            "Acknowledgment deadline in seconds")
+            "Acknowledgment deadline in seconds applied to pulled messages while they await commit (0 keeps the subscription default)")
         .Define(PubSubConnectorConfig.AutoAckConfig, ConfigType.Boolean, PubSubConnectorConfig.DefaultAutoAck, Importance.Medium,
-            "Automatically acknowledge messages after pull (vs. commit-based ack)")
+            "Acknowledge messages immediately on pull (at-most-once: a crash before delivery loses them). Default: acknowledge after records are committed to Surgewave (at-least-once)")
         .Define(PubSubConnectorConfig.HeaderPrefixConfig, ConfigType.String, PubSubConnectorConfig.DefaultHeaderPrefix, Importance.Low,
             "Prefix for Pub/Sub attributes in Surgewave headers")
         .Define(PubSubConnectorConfig.IncludeMetadataConfig, ConfigType.Boolean, PubSubConnectorConfig.DefaultIncludeMetadata, Importance.Low,

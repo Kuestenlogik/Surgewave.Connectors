@@ -159,22 +159,36 @@ public sealed class EfsSourceTask : SourceTask
 
         if (_includeMountTargets)
         {
-            var mtRequest = new DescribeMountTargetsRequest { FileSystemId = fs.FileSystemId };
-            var mtResponse = await _efsClient!.DescribeMountTargetsAsync(mtRequest, cancellationToken);
-            state.MountTargetStates = mtResponse.MountTargets
-                .Select(mt => $"{mt.MountTargetId}:{mt.LifeCycleState}")
-                .OrderBy(s => s)
-                .ToList();
+            var mountTargetStates = new List<string>();
+            string? mtMarker = null;
+
+            do
+            {
+                var mtRequest = new DescribeMountTargetsRequest { FileSystemId = fs.FileSystemId, Marker = mtMarker };
+                var mtResponse = await _efsClient!.DescribeMountTargetsAsync(mtRequest, cancellationToken);
+                mountTargetStates.AddRange(mtResponse.MountTargets
+                    .Select(mt => $"{mt.MountTargetId}:{mt.LifeCycleState}"));
+                mtMarker = mtResponse.NextMarker;
+            } while (!string.IsNullOrEmpty(mtMarker));
+
+            state.MountTargetStates = mountTargetStates.OrderBy(s => s).ToList();
         }
 
         if (_includeAccessPoints)
         {
-            var apRequest = new DescribeAccessPointsRequest { FileSystemId = fs.FileSystemId };
-            var apResponse = await _efsClient!.DescribeAccessPointsAsync(apRequest, cancellationToken);
-            state.AccessPointStates = apResponse.AccessPoints
-                .Select(ap => $"{ap.AccessPointId}:{ap.LifeCycleState}")
-                .OrderBy(s => s)
-                .ToList();
+            var accessPointStates = new List<string>();
+            string? apToken = null;
+
+            do
+            {
+                var apRequest = new DescribeAccessPointsRequest { FileSystemId = fs.FileSystemId, NextToken = apToken };
+                var apResponse = await _efsClient!.DescribeAccessPointsAsync(apRequest, cancellationToken);
+                accessPointStates.AddRange(apResponse.AccessPoints
+                    .Select(ap => $"{ap.AccessPointId}:{ap.LifeCycleState}"));
+                apToken = apResponse.NextToken;
+            } while (!string.IsNullOrEmpty(apToken));
+
+            state.AccessPointStates = accessPointStates.OrderBy(s => s).ToList();
         }
 
         return state;

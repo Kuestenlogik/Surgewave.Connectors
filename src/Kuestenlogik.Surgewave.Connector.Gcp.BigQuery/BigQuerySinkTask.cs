@@ -142,14 +142,14 @@ public sealed class BigQuerySinkTask : SinkTask
         }
     }
 
-    private static bool IsRetriableException(Exception ex)
+    internal static bool IsRetriableException(Exception ex)
     {
         // Retry on rate limit, transient network errors
         var message = ex.Message.ToLowerInvariant();
         return message.Contains("rate") ||
                message.Contains("timeout") ||
                message.Contains("unavailable") ||
-               message.Contains("backendError") ||
+               message.Contains("backenderror") ||
                ex is TaskCanceledException;
     }
 
@@ -171,9 +171,11 @@ public sealed class BigQuerySinkTask : SinkTask
                     rows.Add(row);
                 }
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // Invalid JSON, skip this record
+                // Poison record - skip it, but surface the problem instead of dropping it silently
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"Skipping record {record.Topic}-{record.Partition}@{record.Offset}: value is not valid JSON", ex));
             }
         }
 
@@ -241,7 +243,8 @@ public sealed class BigQuerySinkTask : SinkTask
             SkipInvalidRows = true
         };
 
-        await _client.InsertRowsAsync(tableRef, rows, options, cancellationToken);
+        var results = await _client.InsertRowsAsync(tableRef, rows, options, cancellationToken);
+        results.ThrowOnAnyError();
     }
 
     private async Task InsertRowsLoadJobAsync(List<BigQueryInsertRow> rows, CancellationToken cancellationToken)

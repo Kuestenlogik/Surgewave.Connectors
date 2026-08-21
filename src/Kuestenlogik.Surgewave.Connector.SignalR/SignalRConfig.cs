@@ -18,7 +18,7 @@ public static class SignalRConfig
     public const string ReconnectDelayMs = "reconnect.delay.ms";
     public const string ReconnectMaxDelayMs = "reconnect.max.delay.ms";
 
-    // Sink-specific
+    // Message shape (sink output / source subscription binding)
     public const string MessageFormat = "message.format";
     public const string TargetGroup = "target.group";
     public const string TargetUser = "target.user";

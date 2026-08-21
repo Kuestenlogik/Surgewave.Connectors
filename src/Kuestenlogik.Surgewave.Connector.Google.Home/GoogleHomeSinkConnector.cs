@@ -4,11 +4,12 @@ using Kuestenlogik.Surgewave.Plugins.Configuration;
 namespace Kuestenlogik.Surgewave.Connector.Google.Home;
 
 /// <summary>
-/// Sink connector that controls Google Home smart home devices.
+/// Sink connector that reports smart home device state into the Google Home Graph.
+/// The Home Graph API only updates Google's state cache - it cannot actuate devices.
 /// </summary>
 [ConnectorMetadata(
     Name = "google-home-sink",
-    Description = "Controls Google Home smart home devices via Home Graph API",
+    Description = "Reports device state to the Google Home Graph API (report-state; the Home Graph API cannot actuate devices)",
     Author = "Surgewave",
     Tags = "google, home, iot, smart-home, assistant, sink")]
 public sealed class GoogleHomeSinkConnector : SinkConnector

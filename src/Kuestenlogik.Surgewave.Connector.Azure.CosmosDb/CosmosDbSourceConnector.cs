@@ -24,8 +24,6 @@ public sealed class CosmosDbSourceConnector : SourceConnector
         .Define(CosmosDbConnectorConfig.ChangeFeedStartFromConfig, ConfigType.String, CosmosDbConnectorConfig.StartFromNow, Importance.Medium, "Start from: beginning, now, continuation", EditorHint.Select, options: ["beginning", "now", "continuation"])
         .Define(CosmosDbConnectorConfig.ChangeFeedMaxItemsConfig, ConfigType.Int, CosmosDbConnectorConfig.DefaultChangeFeedMaxItems, Importance.Low, "Max items per change feed batch")
         .Define(CosmosDbConnectorConfig.ChangeFeedPollIntervalMsConfig, ConfigType.Int, (int)CosmosDbConnectorConfig.DefaultPollIntervalMs, Importance.Low, "Poll interval in ms")
-        .Define(CosmosDbConnectorConfig.LeaseContainerConfig, ConfigType.String, "", Importance.Low, "Lease container name (auto-created if not specified)")
-        .Define(CosmosDbConnectorConfig.LeaseContainerPrefixConfig, ConfigType.String, CosmosDbConnectorConfig.DefaultLeaseContainerPrefix, Importance.Low, "Lease prefix for this connector instance")
         .Define(CosmosDbConnectorConfig.IncludeMetadataConfig, ConfigType.Boolean, true, Importance.Low, "Include Cosmos DB metadata in output");
 
     public override void Start(IDictionary<string, string> config)

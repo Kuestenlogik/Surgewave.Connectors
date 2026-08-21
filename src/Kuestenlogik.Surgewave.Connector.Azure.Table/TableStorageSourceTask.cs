@@ -169,7 +169,7 @@ public sealed class TableStorageSourceTask : SourceTask
         return records;
     }
 
-    private string BuildQueryFilter()
+    internal string BuildQueryFilter()
     {
         var filters = new List<string>();
 
@@ -183,7 +183,7 @@ public sealed class TableStorageSourceTask : SourceTask
         switch (_incrementalMode)
         {
             case TableStorageConnectorConfig.IncrementalModeTimestamp when _lastTimestamp.HasValue:
-                filters.Add($"Timestamp gt datetime'{_lastTimestamp.Value:O}'");
+                filters.Add($"{_incrementalColumn} gt datetime'{_lastTimestamp.Value:O}'");
                 break;
 
             case TableStorageConnectorConfig.IncrementalModeRowKey when !string.IsNullOrEmpty(_lastRowKey):
@@ -208,9 +208,12 @@ public sealed class TableStorageSourceTask : SourceTask
         switch (_incrementalMode)
         {
             case TableStorageConnectorConfig.IncrementalModeTimestamp:
-                if (entity.Timestamp.HasValue && (!_lastTimestamp.HasValue || entity.Timestamp.Value > _lastTimestamp.Value))
+                // Track the configured incremental column ("Timestamp" resolves to the
+                // built-in property); fall back to Timestamp when the column is absent
+                var timestamp = entity.GetDateTimeOffset(_incrementalColumn) ?? entity.Timestamp;
+                if (timestamp.HasValue && (!_lastTimestamp.HasValue || timestamp.Value > _lastTimestamp.Value))
                 {
-                    _lastTimestamp = entity.Timestamp.Value;
+                    _lastTimestamp = timestamp.Value;
                 }
                 break;
 

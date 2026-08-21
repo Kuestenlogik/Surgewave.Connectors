@@ -31,10 +31,17 @@ public sealed class InstagramSinkConnector : SinkConnector
         .Define(InstagramConnectorConfig.ImageUrlField, ConfigType.String, "image_url", Importance.Medium,
             "JSON field containing image URL")
         .Define(InstagramConnectorConfig.MediaType, ConfigType.String, "image", Importance.Medium,
-            "Media type: image, video, carousel", EditorHint.Select, options: ["image", "video", "carousel"]);
+            "Media type (only 'image' is currently supported)", EditorHint.Select, options: ["image"]);
 
     public override void Start(IDictionary<string, string> config)
     {
+        var mediaType = config.TryGetValue(InstagramConnectorConfig.MediaType, out var mt) ? mt : "image";
+        if (!string.Equals(mediaType, "image", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"'{InstagramConnectorConfig.MediaType}' value '{mediaType}' is not supported - only 'image' is implemented");
+        }
+
         _config = config;
     }
 

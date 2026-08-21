@@ -220,6 +220,42 @@ public sealed class TextAnalyticsSinkConnectorTests
     }
 
     [Fact]
+    public void TextAnalyticsSinkConnector_Start_AcceptsValidHealthcareConfig()
+    {
+        using var connector = new TextAnalyticsSinkConnector();
+        connector.Initialize(CreateContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [TextAnalyticsConnectorConfig.TopicsConfig] = "test-topic",
+            [TextAnalyticsConnectorConfig.EndpointConfig] = "https://test.cognitiveservices.azure.com",
+            [TextAnalyticsConnectorConfig.ModeConfig] = TextAnalyticsConnectorConfig.ModeHealthcare
+        };
+
+        // Should not throw
+        connector.Start(config);
+        connector.Stop();
+    }
+
+    [Fact]
+    public void TextAnalyticsSinkConnector_Start_AcceptsValidAbstractiveSummarizationConfig()
+    {
+        using var connector = new TextAnalyticsSinkConnector();
+        connector.Initialize(CreateContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [TextAnalyticsConnectorConfig.TopicsConfig] = "test-topic",
+            [TextAnalyticsConnectorConfig.EndpointConfig] = "https://test.cognitiveservices.azure.com",
+            [TextAnalyticsConnectorConfig.ModeConfig] = TextAnalyticsConnectorConfig.ModeAbstractiveSummarization
+        };
+
+        // Should not throw
+        connector.Start(config);
+        connector.Stop();
+    }
+
+    [Fact]
     public void TextAnalyticsSinkConnector_TaskConfigs_ReturnsSingleTask()
     {
         using var connector = new TextAnalyticsSinkConnector();

@@ -107,10 +107,10 @@ public sealed class ParquetSinkTask : SinkTask
             _currentFilePath = GetFilePath();
         }
 
-        // Build schema from first record if needed
+        // Build schema from all buffered records if needed
         if (_schema == null && _buffer.Count > 0)
         {
-            _schema = InferSchema(_buffer[0]);
+            _schema = InferSchema(_buffer);
         }
 
         if (_schema == null)
@@ -149,14 +149,21 @@ public sealed class ParquetSinkTask : SinkTask
         return _outputPath;
     }
 
-    private static ParquetSchema InferSchema(Dictionary<string, object?> sample)
+    private static ParquetSchema InferSchema(List<Dictionary<string, object?>> samples)
     {
         var fields = new List<DataField>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var (key, value) in sample)
+        foreach (var sample in samples)
         {
-            // Always use string type for simplicity - JSON values are strings anyway
-            fields.Add(new DataField<string>(key));
+            foreach (var key in sample.Keys)
+            {
+                if (seen.Add(key))
+                {
+                    // Always use string type for simplicity - JSON values are strings anyway
+                    fields.Add(new DataField<string>(key));
+                }
+            }
         }
 
         return new ParquetSchema(fields);
@@ -176,21 +183,20 @@ public sealed class ParquetSinkTask : SinkTask
             columns.Add(new DataColumn(field, values));
         }
 
-        // Determine if we should append
-        var append = _outputMode == ParquetConnectorConfig.OutputModeAppend && File.Exists(_currentFilePath);
-
-        if (append)
-        {
-            // Read existing data
-            var existingData = await ReadExistingDataAsync();
-
-            // Merge with new data
-            columns = MergeColumns(existingData, columns, fields);
-        }
+        // Append new row groups in append mode and for subsequent flushes of the current
+        // rolling file — recreating the file here would truncate all previously flushed rows.
+        // Overwrite mode deliberately replaces the file. A failure to open or append to an
+        // existing file propagates to the worker (retry/DLQ) instead of discarding rows.
+        var existingFile = new FileInfo(_currentFilePath);
+        var append = existingFile.Exists && existingFile.Length > 0 &&
+            (_outputMode == ParquetConnectorConfig.OutputModeAppend ||
+             _outputMode == ParquetConnectorConfig.OutputModeRolling);
 
         // Write to file
-        using var stream = File.Create(_currentFilePath);
-        using var writer = await ParquetWriter.CreateAsync(_schema, stream);
+        using var stream = append
+            ? File.Open(_currentFilePath, FileMode.Open, FileAccess.ReadWrite)
+            : File.Create(_currentFilePath);
+        using var writer = await ParquetWriter.CreateAsync(_schema, stream, append: append);
 
         writer.CompressionMethod = _compressionMethod;
 
@@ -212,91 +218,6 @@ public sealed class ParquetSinkTask : SinkTask
 
             rowsWritten += rowsToWrite;
         }
-    }
-
-    private async Task<List<DataColumn>> ReadExistingDataAsync()
-    {
-        var columns = new List<DataColumn>();
-
-        if (!File.Exists(_currentFilePath))
-            return columns;
-
-        try
-        {
-            using var reader = await ParquetReader.CreateAsync(_currentFilePath);
-            var schema = reader.Schema;
-
-            for (var i = 0; i < reader.RowGroupCount; i++)
-            {
-                using var groupReader = reader.OpenRowGroupReader(i);
-                var groupColumns = new List<DataColumn>();
-
-                foreach (var field in schema.DataFields)
-                {
-                    var column = await groupReader.ReadColumnAsync(field);
-                    groupColumns.Add(column);
-                }
-
-                if (columns.Count == 0)
-                {
-                    columns.AddRange(groupColumns);
-                }
-                else
-                {
-                    // Merge row groups
-                    for (var j = 0; j < columns.Count && j < groupColumns.Count; j++)
-                    {
-                        columns[j] = MergeDataColumn(columns[j], groupColumns[j]);
-                    }
-                }
-            }
-        }
-        catch
-        {
-            // If we can't read the existing file, start fresh
-        }
-
-        return columns;
-    }
-
-    private static DataColumn MergeDataColumn(DataColumn existing, DataColumn newColumn)
-    {
-        var mergedLength = existing.Data.Length + newColumn.Data.Length;
-        var mergedArray = Array.CreateInstance(existing.Data.GetType().GetElementType()!, mergedLength);
-
-        Array.Copy(existing.Data, 0, mergedArray, 0, existing.Data.Length);
-        Array.Copy(newColumn.Data, 0, mergedArray, existing.Data.Length, newColumn.Data.Length);
-
-        return new DataColumn(existing.Field, mergedArray);
-    }
-
-    private List<DataColumn> MergeColumns(List<DataColumn> existing, List<DataColumn> newColumns, DataField[] fields)
-    {
-        if (existing.Count == 0)
-            return newColumns;
-
-        var merged = new List<DataColumn>();
-
-        for (var i = 0; i < fields.Length; i++)
-        {
-            var existingCol = existing.FirstOrDefault(c => c.Field.Name == fields[i].Name);
-            var newCol = newColumns.FirstOrDefault(c => c.Field.Name == fields[i].Name);
-
-            if (existingCol != null && newCol != null)
-            {
-                merged.Add(MergeDataColumn(existingCol, newCol));
-            }
-            else if (existingCol != null)
-            {
-                merged.Add(existingCol);
-            }
-            else if (newCol != null)
-            {
-                merged.Add(newCol);
-            }
-        }
-
-        return merged;
     }
 
     private static string GetStringValue(Dictionary<string, object?> data, string fieldName)
@@ -338,7 +259,15 @@ public sealed class ParquetSinkTask : SinkTask
     {
         if (disposing)
         {
-            FlushBuffer().GetAwaiter().GetResult();
+            try
+            {
+                FlushBuffer().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                // Dispose must not throw — Stop() has already surfaced flush failures
+                Context?.RaiseError?.Invoke(ex);
+            }
         }
         base.Dispose(disposing);
     }

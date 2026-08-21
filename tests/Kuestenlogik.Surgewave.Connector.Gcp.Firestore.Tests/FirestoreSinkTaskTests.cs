@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Google.Cloud.Firestore;
 using Kuestenlogik.Surgewave.Connector.Gcp.Firestore;
 using Kuestenlogik.Surgewave.Connect;
 
@@ -273,6 +275,32 @@ public class FirestoreSinkTaskTests
 
         // Empty list should be handled
         await task.PutAsync(Array.Empty<SinkRecord>(), CancellationToken.None);
+    }
+
+    [Fact]
+    public void ConvertJsonElement_MapsPureLatLngObjectToGeoPoint()
+    {
+        using var doc = JsonDocument.Parse("{\"lat\": 52.5, \"lng\": 13.4}");
+
+        var converted = FirestoreSinkTask.ConvertJsonElement(doc.RootElement);
+
+        var geoPoint = Assert.IsType<GeoPoint>(converted);
+        Assert.Equal(52.5, geoPoint.Latitude);
+        Assert.Equal(13.4, geoPoint.Longitude);
+    }
+
+    [Fact]
+    public void ConvertJsonElement_KeepsAllFieldsOfObjectsThatAreNotPureLatLng()
+    {
+        using var doc = JsonDocument.Parse("{\"lat\": 52.5, \"lng\": 13.4, \"name\": \"Berlin\"}");
+
+        var converted = FirestoreSinkTask.ConvertJsonElement(doc.RootElement);
+
+        var dict = Assert.IsType<Dictionary<string, object?>>(converted);
+        Assert.Equal(3, dict.Count);
+        Assert.Equal(52.5, dict["lat"]);
+        Assert.Equal(13.4, dict["lng"]);
+        Assert.Equal("Berlin", dict["name"]);
     }
 
     [Fact]

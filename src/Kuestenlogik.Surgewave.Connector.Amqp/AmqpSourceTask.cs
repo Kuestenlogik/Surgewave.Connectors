@@ -23,7 +23,15 @@ public sealed class AmqpSourceTask : SourceTask
 
     public override string Version => "1.0.0";
 
-    public override async void Start(IDictionary<string, string> config)
+    public override void Start(IDictionary<string, string> config)
+    {
+        // Complete the async setup synchronously: Start must not return before the
+        // connection/channel exist (PollAsync would race a null channel), and a
+        // connection failure must fail the task instead of escaping as async-void.
+        StartAsync(config).GetAwaiter().GetResult();
+    }
+
+    private async Task StartAsync(IDictionary<string, string> config)
     {
         _topic = config[AmqpConnectorConfig.Topic];
         _queue = config[AmqpConnectorConfig.SourceQueue];
@@ -214,13 +222,23 @@ public sealed class AmqpSourceTask : SourceTask
             await _channel!.BasicAckAsync(maxTag, true);
             _pendingAcks.Clear();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Delivery tags are channel-scoped: after an ack failure the tags must not
+            // be retried, or a later cumulative ack on a recreated channel (whose tags
+            // restart at 1) could ack the wrong deliveries. Drop them - the unacked
+            // messages will simply be redelivered (at-least-once).
+            _pendingAcks.Clear();
+            Context?.RaiseError?.Invoke(ex);
         }
     }
 
-    public override async void Stop()
+    public override void Stop()
+    {
+        StopAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task StopAsync()
     {
         if (_channel != null)
         {

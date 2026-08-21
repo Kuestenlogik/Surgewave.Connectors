@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Akka.Actor;
+using Akka.Event;
 using Kuestenlogik.Surgewave.Connect;
 
 namespace Kuestenlogik.Surgewave.Connector.Akka;
@@ -54,6 +55,17 @@ public sealed class AkkaSinkTask : SinkTask
             : _actorPath;
 
         _targetActorSelection = _actorSystem.ActorSelection(fullPath);
+
+        // Tell is fire-and-forget: a message to a non-existent actor silently becomes a
+        // dead letter. Watch the event stream so non-delivery is surfaced as a task error
+        // instead of records being acked at-most-once with no signal.
+        var raiseError = Context?.RaiseError;
+        if (_tellOnly && raiseError != null)
+        {
+            _actorSystem.ActorOf(
+                Props.Create(() => new DeadLetterMonitorActor(raiseError)),
+                "surgewave-dead-letter-monitor");
+        }
     }
 
     private static string GetConfigValue(IDictionary<string, string> config, string key, string defaultValue)
@@ -201,6 +213,35 @@ public sealed class AkkaSinkTask : SinkTask
     {
         // Tell operations are fire-and-forget, Ask operations complete in PutAsync
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Watches the actor system's event stream for Surgewave messages that end up
+    /// as dead letters and reports them through the task's error callback.
+    /// </summary>
+    private sealed class DeadLetterMonitorActor : ReceiveActor
+    {
+        public DeadLetterMonitorActor(Action<Exception> raiseError)
+        {
+            Receive<DeadLetter>(letter =>
+            {
+                if (letter.Message is SurgewaveMessage)
+                {
+                    raiseError(new InvalidOperationException(
+                        $"Akka sink message was not delivered to '{letter.Recipient.Path}' (dead letter)"));
+                }
+            });
+        }
+
+        protected override void PreStart()
+        {
+            Context.System.EventStream.Subscribe(Self, typeof(DeadLetter));
+        }
+
+        protected override void PostStop()
+        {
+            Context.System.EventStream.Unsubscribe(Self);
+        }
     }
 }
 

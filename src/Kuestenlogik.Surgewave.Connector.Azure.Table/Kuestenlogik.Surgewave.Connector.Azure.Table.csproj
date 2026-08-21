@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Kuestenlogik.Surgewave.Connector.Azure.Table.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Azure.Data.Tables" />
   </ItemGroup>
   <ItemGroup>

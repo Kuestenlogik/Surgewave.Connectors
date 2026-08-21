@@ -19,8 +19,6 @@ public static class CosmosDbConnectorConfig
     public const string ChangeFeedStartFromConfig = "azure.cosmosdb.changefeed.start.from";
     public const string ChangeFeedMaxItemsConfig = "azure.cosmosdb.changefeed.max.items";
     public const string ChangeFeedPollIntervalMsConfig = "azure.cosmosdb.changefeed.poll.interval.ms";
-    public const string LeaseContainerConfig = "azure.cosmosdb.lease.container";
-    public const string LeaseContainerPrefixConfig = "azure.cosmosdb.lease.prefix";
 
     // Sink configs
     public const string WriteModeConfig = "azure.cosmosdb.write.mode";
@@ -48,7 +46,6 @@ public static class CosmosDbConnectorConfig
     public const int DefaultMaxRetryCount = 9;
     public const long DefaultMaxRetryWaitTimeMs = 30000;
     public const string DefaultTopicPattern = "cosmosdb.${database}.${container}";
-    public const string DefaultLeaseContainerPrefix = "surgewave-connector";
 
     // Write modes
     public const string WriteModeUpsert = "upsert";

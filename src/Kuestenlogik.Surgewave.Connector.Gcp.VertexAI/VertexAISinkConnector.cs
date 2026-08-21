@@ -33,7 +33,7 @@ public sealed class VertexAISinkConnector : SinkConnector
             "Webhook URL to POST results (optional, logs to console if not set)")
         // Mode
         .Define(VertexAIConnectorConfig.ModeConfig, ConfigType.String, VertexAIConnectorConfig.ModeCompletions, Importance.High,
-            "Processing mode: 'completions' or 'embeddings'", EditorHint.Select, options: ["chat", "embeddings"])
+            "Processing mode: 'completions' or 'embeddings'", EditorHint.Select, options: [VertexAIConnectorConfig.ModeCompletions, VertexAIConnectorConfig.ModeEmbeddings])
         // Completions config
         .Define(VertexAIConnectorConfig.ModelConfig, ConfigType.String, VertexAIConnectorConfig.DefaultModel, Importance.Medium,
             "Gemini model (e.g., 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash')")

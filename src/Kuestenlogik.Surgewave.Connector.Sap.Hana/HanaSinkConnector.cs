@@ -41,7 +41,7 @@ public sealed class HanaSinkConnector : SinkConnector
             "Target table for writes")
         .Define(HanaConnectorConfig.WriteMode, ConfigType.String,
             HanaConnectorConfig.DefaultWriteMode, Importance.Medium,
-            "Write mode: insert, upsert, merge", EditorHint.Select, options: ["insert", "upsert", "update"])
+            "Write mode: insert, upsert, merge", EditorHint.Select, options: ["insert", "upsert", "merge"])
         .Define(HanaConnectorConfig.KeyColumns, ConfigType.List, "", Importance.Medium,
             "Key columns for upsert/merge (comma-separated)")
         .Define(HanaConnectorConfig.BatchSize, ConfigType.Int,

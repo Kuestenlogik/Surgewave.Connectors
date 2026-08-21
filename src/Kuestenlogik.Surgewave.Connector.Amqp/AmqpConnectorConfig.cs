@@ -35,7 +35,6 @@ public static class AmqpConnectorConfig
     public const string DeclareExchange = "amqp.declare.exchange";
     public const string ExchangeDurable = "amqp.exchange.durable";
     public const string Persistent = "amqp.persistent";
-    public const string BatchSize = "amqp.batch.size";
 
     // Defaults
     public const int DefaultPort = 5672;
@@ -43,6 +42,5 @@ public static class AmqpConnectorConfig
     public const string DefaultVirtualHost = "/";
     public const int DefaultHeartbeatSeconds = 60;
     public const int DefaultPrefetchCount = 100;
-    public const int DefaultBatchSize = 100;
     public const string DefaultExchangeType = "direct";
 }

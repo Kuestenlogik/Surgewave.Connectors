@@ -22,14 +22,12 @@ public sealed class InstagramSourceConnector : SourceConnector
     public override ConfigDef Config => new ConfigDef()
         .Define(InstagramConnectorConfig.Topic, ConfigType.String, Importance.High,
             "Destination topic for Instagram events", EditorHint.Topic)
-        .Define(InstagramConnectorConfig.AccessToken, ConfigType.Password, Importance.High,
-            "Instagram Graph API access token")
         .Define(InstagramConnectorConfig.BusinessAccountId, ConfigType.String, Importance.High,
             "Instagram Business Account ID")
-        .Define(InstagramConnectorConfig.ApiVersion, ConfigType.String, InstagramConnectorConfig.DefaultApiVersion, Importance.Medium,
-            "Graph API version")
         .Define(InstagramConnectorConfig.WebhookVerifyToken, ConfigType.Password, Importance.High,
             "Token for webhook verification")
+        .Define(InstagramConnectorConfig.AppSecret, ConfigType.Password, "", Importance.High,
+            "App secret used to validate the X-Hub-Signature-256 header on webhook events; unsigned or tampered requests are rejected (if empty, signatures are not validated)")
         .Define(InstagramConnectorConfig.WebhookPort, ConfigType.Int, InstagramConnectorConfig.DefaultWebhookPort, Importance.Medium,
             "Port for webhook HTTP server")
         .Define(InstagramConnectorConfig.WebhookPath, ConfigType.String, InstagramConnectorConfig.DefaultWebhookPath, Importance.Medium,

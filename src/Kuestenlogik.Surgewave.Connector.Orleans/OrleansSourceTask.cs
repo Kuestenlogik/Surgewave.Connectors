@@ -1,7 +1,7 @@
-using System.Collections.Concurrent;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
 using Orleans.Configuration;
 using Orleans.Streams;
@@ -29,7 +29,11 @@ public sealed class OrleansSourceTask : SourceTask
     private IHost? _host;
     private IClusterClient? _client;
     private StreamSubscriptionHandle<byte[]>? _subscription;
-    private readonly ConcurrentQueue<(byte[] Data, StreamSequenceToken? Token)> _buffer = new();
+    private readonly Channel<(byte[] Data, StreamSequenceToken? Token)> _buffer =
+        Channel.CreateBounded<(byte[] Data, StreamSequenceToken? Token)>(new BoundedChannelOptions(10000)
+        {
+            FullMode = BoundedChannelFullMode.Wait
+        });
 
     public override void Start(IDictionary<string, string> config)
     {
@@ -83,15 +87,24 @@ public sealed class OrleansSourceTask : SourceTask
         _subscription = await stream.SubscribeAsync(OnNextAsync, OnErrorAsync, OnCompletedAsync);
     }
 
-    private Task OnNextAsync(byte[] data, StreamSequenceToken? token)
+    private async Task OnNextAsync(byte[] data, StreamSequenceToken? token)
     {
-        _buffer.Enqueue((data, token));
-        return Task.CompletedTask;
+        try
+        {
+            // The bounded buffer applies backpressure to the Orleans stream delivery
+            // instead of growing an unbounded queue while the poll loop lags behind.
+            await _buffer.Writer.WriteAsync((data, token));
+        }
+        catch (ChannelClosedException)
+        {
+            // Task is stopping — the buffer no longer accepts events
+        }
     }
 
     private Task OnErrorAsync(Exception ex)
     {
-        // Log and continue — errors don't stop the subscription
+        // Surface the stream error — the subscription itself continues
+        Context?.RaiseError?.Invoke(ex);
         return Task.CompletedTask;
     }
 
@@ -105,7 +118,7 @@ public sealed class OrleansSourceTask : SourceTask
         var records = new List<SourceRecord>();
         var count = 0;
 
-        while (count < _batchSize && _buffer.TryDequeue(out var item))
+        while (count < _batchSize && _buffer.Reader.TryRead(out var item))
         {
             var sourcePartition = new Dictionary<string, object>
             {
@@ -148,6 +161,8 @@ public sealed class OrleansSourceTask : SourceTask
             try { _subscription.UnsubscribeAsync().GetAwaiter().GetResult(); }
             catch { /* ignore */ }
         }
+
+        _buffer.Writer.TryComplete();
     }
 
     protected override void Dispose(bool disposing)

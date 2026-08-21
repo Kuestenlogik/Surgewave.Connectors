@@ -25,7 +25,6 @@ public static class InstagramConnectorConfig
     // Sink settings
     public const string CaptionField = "instagram.caption.field";
     public const string ImageUrlField = "instagram.image.url.field";
-    public const string VideoUrlField = "instagram.video.url.field";
     public const string MediaType = "instagram.media.type";
 
     // Defaults

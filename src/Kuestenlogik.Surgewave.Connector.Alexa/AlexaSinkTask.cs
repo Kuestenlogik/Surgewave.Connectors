@@ -43,8 +43,17 @@ public sealed class AlexaSinkTask : SinkTask
 
     public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
-        await EnsureAccessTokenAsync(cancellationToken);
-        if (string.IsNullOrEmpty(_accessToken)) return;
+        try
+        {
+            // A failed token refresh must fail the batch so the worker retries/DLQs
+            // instead of committing offsets for commands that were never sent.
+            await EnsureAccessTokenAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            Context?.RaiseError?.Invoke(ex);
+            throw;
+        }
 
         var baseUrl = RegionEndpoints.TryGetValue(_region, out var url) ? url : RegionEndpoints["NA"];
 
@@ -52,30 +61,53 @@ public sealed class AlexaSinkTask : SinkTask
         {
             if (record.Value == null) continue;
 
+            string? endpointId;
+            string? directive;
             try
             {
                 using var doc = JsonDocument.Parse(record.Value);
                 var root = doc.RootElement;
 
                 // Get endpoint ID from payload, headers, or default
-                var endpointId = GetString(root, "endpointId", record.Headers) ?? _defaultEndpointId;
-                if (string.IsNullOrEmpty(endpointId)) continue;
+                endpointId = GetString(root, "endpointId", record.Headers) ?? _defaultEndpointId;
+                if (string.IsNullOrEmpty(endpointId))
+                {
+                    // Poison record: no endpoint to address - skip it, but make it visible
+                    Context?.RaiseError?.Invoke(new InvalidOperationException(
+                        $"Alexa sink record {record.Topic}/{record.Partition}@{record.Offset} has no endpointId and no default endpoint is configured"));
+                    continue;
+                }
 
                 // Build directive based on command type
-                var directive = BuildDirective(root, endpointId);
-                if (directive == null) continue;
-
-                // Send directive
-                using var requestContent = new StringContent(directive, Encoding.UTF8, "application/json");
-                using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v3/appliances/{endpointId}/directives");
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
-                request.Content = requestContent;
-
-                using var _ = await _httpClient!.SendAsync(request, cancellationToken);
+                directive = BuildDirective(root, endpointId);
+                if (directive == null)
+                {
+                    // Poison record: no recognizable command - skip it, but make it visible
+                    Context?.RaiseError?.Invoke(new InvalidOperationException(
+                        $"Alexa sink record {record.Topic}/{record.Partition}@{record.Offset} contains no recognizable directive"));
+                    continue;
+                }
             }
-            catch (Exception)
+            catch (JsonException ex)
             {
-                // Log and continue
+                // Poison record: unparseable payload - skip it, but make it visible
+                Context?.RaiseError?.Invoke(ex);
+                continue;
+            }
+
+            // Send directive; a delivery failure must fail the batch
+            using var requestContent = new StringContent(directive, Encoding.UTF8, "application/json");
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/v3/appliances/{endpointId}/directives");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+            request.Content = requestContent;
+
+            using var response = await _httpClient!.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var ex = new HttpRequestException(
+                    $"Alexa directive for endpoint '{endpointId}' failed with status {(int)response.StatusCode} ({response.StatusCode})");
+                Context?.RaiseError?.Invoke(ex);
+                throw ex;
             }
         }
     }
@@ -195,31 +227,33 @@ public sealed class AlexaSinkTask : SinkTask
         if (_accessToken != null && DateTime.UtcNow < _tokenExpiry)
             return;
 
-        try
+        using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.amazon.com/auth/o2/token");
+        using var formContent = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.amazon.com/auth/o2/token");
-            using var formContent = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = _refreshToken,
-                ["client_id"] = _clientId,
-                ["client_secret"] = _clientSecret
-            });
-            tokenRequest.Content = formContent;
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = _refreshToken,
+            ["client_id"] = _clientId,
+            ["client_secret"] = _clientSecret
+        });
+        tokenRequest.Content = formContent;
 
-            using var response = await _httpClient!.SendAsync(tokenRequest, ct);
-            if (!response.IsSuccessStatusCode) return;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            _accessToken = doc.RootElement.GetProperty("access_token").GetString();
-            var expiresIn = doc.RootElement.GetProperty("expires_in").GetInt32();
-            _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
+        using var response = await _httpClient!.SendAsync(tokenRequest, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"Alexa token refresh failed with status {(int)response.StatusCode} ({response.StatusCode})");
         }
-        catch (Exception)
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(json);
+
+        _accessToken = doc.RootElement.GetProperty("access_token").GetString();
+        var expiresIn = doc.RootElement.GetProperty("expires_in").GetInt32();
+        _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
+
+        if (string.IsNullOrEmpty(_accessToken))
         {
-            // Log and continue
+            throw new InvalidOperationException("Alexa token response did not contain an access token");
         }
     }
 

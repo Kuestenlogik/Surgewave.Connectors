@@ -80,7 +80,6 @@ public sealed class AlexaSourceTask : SourceTask
         try
         {
             await EnsureAccessTokenAsync(cancellationToken);
-            if (string.IsNullOrEmpty(_accessToken)) return [];
 
             var baseUrl = RegionEndpoints.TryGetValue(_region, out var url) ? url : RegionEndpoints["NA"];
 
@@ -88,7 +87,11 @@ public sealed class AlexaSourceTask : SourceTask
             using var endpointsRequest = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/v1/endpoints");
             endpointsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
             using var endpointsResponse = await _httpClient!.SendAsync(endpointsRequest, cancellationToken);
-            if (!endpointsResponse.IsSuccessStatusCode) return [];
+            if (!endpointsResponse.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException(
+                    $"Alexa endpoints request failed with status {(int)endpointsResponse.StatusCode} ({endpointsResponse.StatusCode})");
+            }
 
             var endpointsJson = await endpointsResponse.Content.ReadAsStringAsync(cancellationToken);
             using var endpointsDoc = JsonDocument.Parse(endpointsJson);
@@ -117,9 +120,15 @@ public sealed class AlexaSourceTask : SourceTask
                 records.Add(CreateDeviceRecord(endpoint, endpointId, displayCategories, state));
             }
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // Log and continue
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Surface poll failures (bad credentials, API errors) instead of
+            // silently returning an empty batch forever; the next poll retries.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
@@ -130,31 +139,33 @@ public sealed class AlexaSourceTask : SourceTask
         if (_accessToken != null && DateTime.UtcNow < _tokenExpiry)
             return;
 
-        try
+        using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.amazon.com/auth/o2/token");
+        using var formContent = new FormUrlEncodedContent(new Dictionary<string, string>
         {
-            using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.amazon.com/auth/o2/token");
-            using var formContent = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["grant_type"] = "refresh_token",
-                ["refresh_token"] = _refreshToken,
-                ["client_id"] = _clientId,
-                ["client_secret"] = _clientSecret
-            });
-            tokenRequest.Content = formContent;
+            ["grant_type"] = "refresh_token",
+            ["refresh_token"] = _refreshToken,
+            ["client_id"] = _clientId,
+            ["client_secret"] = _clientSecret
+        });
+        tokenRequest.Content = formContent;
 
-            using var response = await _httpClient!.SendAsync(tokenRequest, ct);
-            if (!response.IsSuccessStatusCode) return;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-
-            _accessToken = doc.RootElement.GetProperty("access_token").GetString();
-            var expiresIn = doc.RootElement.GetProperty("expires_in").GetInt32();
-            _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
+        using var response = await _httpClient!.SendAsync(tokenRequest, ct);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"Alexa token refresh failed with status {(int)response.StatusCode} ({response.StatusCode})");
         }
-        catch (Exception)
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(json);
+
+        _accessToken = doc.RootElement.GetProperty("access_token").GetString();
+        var expiresIn = doc.RootElement.GetProperty("expires_in").GetInt32();
+        _tokenExpiry = DateTime.UtcNow.AddSeconds(expiresIn - 60);
+
+        if (string.IsNullOrEmpty(_accessToken))
         {
-            // Log and continue
+            throw new InvalidOperationException("Alexa token response did not contain an access token");
         }
     }
 

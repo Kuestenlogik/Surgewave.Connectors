@@ -83,6 +83,12 @@ public sealed class LanguageSinkTask : SinkTask
         // Build client
         var builder = new LanguageServiceClientBuilder();
 
+        // Bill requests against the configured project when one is given
+        if (config.TryGetValue(LanguageConnectorConfig.ProjectIdConfig, out var projectId) && !string.IsNullOrEmpty(projectId))
+        {
+            builder.QuotaProject = projectId;
+        }
+
         // Handle credentials
         if (config.TryGetValue(LanguageConnectorConfig.CredentialsJsonConfig, out var credJson) && !string.IsNullOrEmpty(credJson))
         {
@@ -124,6 +130,13 @@ public sealed class LanguageSinkTask : SinkTask
         {
             await FlushBufferAsync(cancellationToken);
         }
+    }
+
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // The worker commits offsets right after this call - drain the buffer so no
+        // consumed record sits unprocessed in memory with a committed offset
+        await FlushBufferAsync(cancellationToken);
     }
 
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
@@ -212,22 +225,19 @@ public sealed class LanguageSinkTask : SinkTask
                 break;
 
             case LanguageConnectorConfig.ModeSyntax:
-                var syntaxResponse = await _client.AnalyzeSentimentAsync(document, cancellationToken: cancellationToken);
+                var syntaxResponse = await _client.AnalyzeSyntaxAsync(document, cancellationToken: cancellationToken);
                 var tokensArray = new JsonArray();
-                foreach (var sentence in syntaxResponse.Sentences)
+                foreach (var token in syntaxResponse.Tokens)
                 {
                     tokensArray.Add(new JsonObject
                     {
-                        ["text"] = sentence.Text.Content,
-                        ["beginOffset"] = sentence.Text.BeginOffset,
-                        ["sentiment"] = new JsonObject
-                        {
-                            ["score"] = sentence.Sentiment.Score,
-                            ["magnitude"] = sentence.Sentiment.Magnitude
-                        }
+                        ["text"] = token.Text.Content,
+                        ["beginOffset"] = token.Text.BeginOffset,
+                        ["partOfSpeech"] = token.PartOfSpeech.Tag.ToString(),
+                        ["lemma"] = token.Lemma
                     });
                 }
-                result["sentences"] = tokensArray;
+                result["tokens"] = tokensArray;
                 break;
 
             case LanguageConnectorConfig.ModeClassify:
@@ -376,7 +386,8 @@ public sealed class LanguageSinkTask : SinkTask
 
         if (!string.IsNullOrEmpty(_webhookUrl) && _httpClient != null)
         {
-            await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            using var response = await _httpClient.PostAsJsonAsync(_webhookUrl, output, cancellationToken);
+            response.EnsureSuccessStatusCode();
         }
         else
         {

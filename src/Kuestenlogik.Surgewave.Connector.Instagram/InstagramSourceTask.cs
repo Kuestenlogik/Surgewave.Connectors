@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -23,6 +24,7 @@ public sealed class InstagramSourceTask : SourceTask
     private string _topic = string.Empty;
     private string _verifyToken = string.Empty;
     private string _accountId = string.Empty;
+    private byte[]? _appSecret;
     private bool _includeComments = true;
     private bool _includeMentions = true;
     private long _messageId;
@@ -32,7 +34,10 @@ public sealed class InstagramSourceTask : SourceTask
     private readonly Channel<InstagramWebhookPayload> _eventChannel = Channel.CreateBounded<InstagramWebhookPayload>(
         new BoundedChannelOptions(1000)
         {
-            FullMode = BoundedChannelFullMode.DropOldest,
+            // Wait instead of dropping: events are only acknowledged to Meta with HTTP 200
+            // after they are enqueued, so under backpressure Meta keeps retrying instead of
+            // us silently discarding already-acknowledged events.
+            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false
         });
@@ -44,6 +49,9 @@ public sealed class InstagramSourceTask : SourceTask
         _topic = config[InstagramConnectorConfig.Topic];
         _verifyToken = config[InstagramConnectorConfig.WebhookVerifyToken];
         _accountId = config[InstagramConnectorConfig.BusinessAccountId];
+        _appSecret = config.TryGetValue(InstagramConnectorConfig.AppSecret, out var secret) && !string.IsNullOrEmpty(secret)
+            ? Encoding.UTF8.GetBytes(secret)
+            : null;
 
         _includeComments = !config.TryGetValue(InstagramConnectorConfig.IncludeComments, out var ic) || ic != "false";
         _includeMentions = !config.TryGetValue(InstagramConnectorConfig.IncludeMentions, out var im) || im != "false";
@@ -106,14 +114,22 @@ public sealed class InstagramSourceTask : SourceTask
             {
                 using var reader = new StreamReader(context.Request.InputStream);
                 var body = await reader.ReadToEndAsync();
-                var payload = JsonSerializer.Deserialize<InstagramWebhookPayload>(body, JsonOptions);
 
-                if (payload != null)
+                if (!IsSignatureValid(body, context.Request.Headers["X-Hub-Signature-256"]))
                 {
-                    await _eventChannel.Writer.WriteAsync(payload);
+                    context.Response.StatusCode = 403;
                 }
+                else
+                {
+                    var payload = JsonSerializer.Deserialize<InstagramWebhookPayload>(body, JsonOptions);
 
-                context.Response.StatusCode = 200;
+                    if (payload != null)
+                    {
+                        await _eventChannel.Writer.WriteAsync(payload);
+                    }
+
+                    context.Response.StatusCode = 200;
+                }
             }
             else
             {
@@ -124,6 +140,31 @@ public sealed class InstagramSourceTask : SourceTask
         {
             context.Response.Close();
         }
+    }
+
+    private bool IsSignatureValid(string body, string? signatureHeader)
+    {
+        // Without a configured app secret there is nothing to validate against.
+        if (_appSecret == null) return true;
+
+        if (string.IsNullOrEmpty(signatureHeader) ||
+            !signatureHeader.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        byte[] expected;
+        try
+        {
+            expected = Convert.FromHexString(signatureHeader["sha256=".Length..]);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        var actual = HMACSHA256.HashData(_appSecret, Encoding.UTF8.GetBytes(body));
+        return CryptographicOperations.FixedTimeEquals(actual, expected);
     }
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)

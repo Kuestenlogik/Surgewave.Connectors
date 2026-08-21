@@ -171,6 +171,13 @@ public sealed class BedrockSinkTask : SinkTask
         }
     }
 
+    public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the batch buffer before the worker commits consumer offsets so
+        // buffered records are never acknowledged unprocessed.
+        return FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _client == null) return;
@@ -278,11 +285,19 @@ public sealed class BedrockSinkTask : SinkTask
                 {
                     try
                     {
-                        // Use InvokeModel for embeddings (Titan, Cohere)
-                        var requestBody = new JsonObject
-                        {
-                            ["inputText"] = inputText
-                        };
+                        // Use InvokeModel for embeddings (Titan, Cohere) -
+                        // request shape differs per model family
+                        var isCohere = _modelId.StartsWith("cohere.", StringComparison.Ordinal);
+                        var requestBody = isCohere
+                            ? new JsonObject
+                            {
+                                ["texts"] = new JsonArray(inputText),
+                                ["input_type"] = "search_document"
+                            }
+                            : new JsonObject
+                            {
+                                ["inputText"] = inputText
+                            };
 
                         var request = new InvokeModelRequest
                         {
@@ -302,7 +317,17 @@ public sealed class BedrockSinkTask : SinkTask
                         // Extract embedding (format varies by model)
                         if (responseObj.RootElement.TryGetProperty("embedding", out var embeddingProp))
                         {
+                            // Titan: { "embedding": [...] }
                             embedding = embeddingProp.EnumerateArray()
+                                .Select(e => e.GetSingle())
+                                .ToArray();
+                        }
+                        else if (responseObj.RootElement.TryGetProperty("embeddings", out var embeddingsProp)
+                            && embeddingsProp.ValueKind == JsonValueKind.Array
+                            && embeddingsProp.GetArrayLength() > 0)
+                        {
+                            // Cohere: { "embeddings": [[...]] } - one inner array per input text
+                            embedding = embeddingsProp[0].EnumerateArray()
                                 .Select(e => e.GetSingle())
                                 .ToArray();
                         }

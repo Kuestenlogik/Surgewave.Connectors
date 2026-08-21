@@ -47,7 +47,9 @@ public sealed class GoogleDriveSourceConnectorTests
         var config = connector.Config;
 
         Assert.Contains(config.Keys, k => k.Name == GoogleDriveConnectorConfig.FolderIdConfig);
-        Assert.Contains(config.Keys, k => k.Name == GoogleDriveConnectorConfig.RecursiveConfig);
+
+        // 'recursive' is not implemented and must not be advertised
+        Assert.DoesNotContain(config.Keys, k => k.Name == GoogleDriveConnectorConfig.RecursiveConfig);
     }
 
     [Fact]
@@ -115,6 +117,41 @@ public sealed class GoogleDriveSourceConnectorTests
 
         var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
         Assert.Contains("Invalid mode", ex.Message);
+    }
+
+    [Fact]
+    public void GoogleDriveSourceConnector_Start_ThrowsOnUnsupportedRecursive()
+    {
+        using var connector = new GoogleDriveSourceConnector();
+        connector.Initialize(CreateContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [GoogleDriveConnectorConfig.TopicsConfig] = "test-topic",
+            [GoogleDriveConnectorConfig.CredentialsJsonConfig] = "{\"type\":\"service_account\"}",
+            [GoogleDriveConnectorConfig.RecursiveConfig] = "true"
+        };
+
+        var ex = Assert.Throws<ArgumentException>(() => connector.Start(config));
+        Assert.Contains(GoogleDriveConnectorConfig.RecursiveConfig, ex.Message);
+        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GoogleDriveSourceConnector_Start_AcceptsRecursiveFalse()
+    {
+        using var connector = new GoogleDriveSourceConnector();
+        connector.Initialize(CreateContext());
+
+        var config = new Dictionary<string, string>
+        {
+            [GoogleDriveConnectorConfig.TopicsConfig] = "test-topic",
+            [GoogleDriveConnectorConfig.CredentialsJsonConfig] = "{\"type\":\"service_account\"}",
+            [GoogleDriveConnectorConfig.RecursiveConfig] = "false"
+        };
+
+        connector.Start(config); // Should not throw
+        connector.Stop();
     }
 
     [Fact]

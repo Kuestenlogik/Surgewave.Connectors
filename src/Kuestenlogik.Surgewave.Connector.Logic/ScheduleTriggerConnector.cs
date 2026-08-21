@@ -24,6 +24,7 @@ public sealed class ScheduleTriggerConnector : SourceConnector
     private string _cronExpression = "";
     private string _outputTopic = "";
     private string _payload = "";
+    private string _timezone = "UTC";
 
     public override ConfigDef Config => new ConfigDef()
         .Define(ScheduleTriggerConfig.CronExpression, ConfigType.String, "", Importance.High,
@@ -37,11 +38,20 @@ public sealed class ScheduleTriggerConnector : SourceConnector
 
     public override void Start(IDictionary<string, string> config)
     {
-        _cronExpression = config.GetValueOrDefault(ScheduleTriggerConfig.CronExpression, "")
-            ?? throw new ArgumentException("Cron expression is required");
-        _outputTopic = config.GetValueOrDefault(ScheduleTriggerConfig.OutputTopic, "")
-            ?? throw new ArgumentException("Output topic is required");
+        _cronExpression = config.GetValueOrDefault(ScheduleTriggerConfig.CronExpression, "") ?? "";
+        if (string.IsNullOrWhiteSpace(_cronExpression))
+        {
+            throw new ArgumentException("Cron expression is required");
+        }
+
+        _outputTopic = config.GetValueOrDefault(ScheduleTriggerConfig.OutputTopic, "") ?? "";
+        if (string.IsNullOrWhiteSpace(_outputTopic))
+        {
+            throw new ArgumentException("Output topic is required");
+        }
+
         _payload = config.GetValueOrDefault(ScheduleTriggerConfig.Payload, "{}") ?? "{}";
+        _timezone = config.GetValueOrDefault(ScheduleTriggerConfig.Timezone, "UTC") ?? "UTC";
 
         // Validate cron expression
         try
@@ -51,6 +61,16 @@ public sealed class ScheduleTriggerConnector : SourceConnector
         catch (Exception ex)
         {
             throw new ArgumentException($"Invalid cron expression: {ex.Message}", ex);
+        }
+
+        // Validate timezone
+        try
+        {
+            TimeZoneInfo.FindSystemTimeZoneById(_timezone);
+        }
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
+        {
+            throw new ArgumentException($"Invalid timezone '{_timezone}': {ex.Message}", ex);
         }
     }
 
@@ -65,7 +85,7 @@ public sealed class ScheduleTriggerConnector : SourceConnector
                 [ScheduleTriggerConfig.CronExpression] = _cronExpression,
                 [ScheduleTriggerConfig.OutputTopic] = _outputTopic,
                 [ScheduleTriggerConfig.Payload] = _payload,
-                [ScheduleTriggerConfig.Timezone] = "UTC"
+                [ScheduleTriggerConfig.Timezone] = _timezone
             }
         ];
     }

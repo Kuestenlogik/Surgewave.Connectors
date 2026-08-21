@@ -48,6 +48,17 @@ public sealed class PubSubSourceConnectorTests
     }
 
     [Fact]
+    public void PubSubSourceConnector_Config_AutoAckDefaultsToAtLeastOnce()
+    {
+        using var connector = new PubSubSourceConnector();
+        var autoAckKey = connector.Config.Keys.First(k => k.Name == "gcp.pubsub.auto.ack");
+
+        // At-least-once by default: acknowledge only after records are committed to Surgewave,
+        // never on pull (auto-ack is an explicit opt-in to at-most-once)
+        Assert.False((bool?)autoAckKey.DefaultValue);
+    }
+
+    [Fact]
     public void PubSubSourceConnector_Start_ThrowsOnMissingProjectId()
     {
         using var connector = new PubSubSourceConnector();

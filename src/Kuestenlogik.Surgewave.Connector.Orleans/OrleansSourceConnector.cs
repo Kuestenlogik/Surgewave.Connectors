@@ -31,7 +31,7 @@ public sealed class OrleansSourceConnector : SourceConnector
             "Orleans service identifier")
         .Define(OrleansConnectorConfig.StreamProvider, ConfigType.String,
             OrleansConnectorConfig.DefaultStreamProvider, Importance.Medium,
-            "Orleans stream provider name")
+            "Orleans memory stream provider name (memory streams are the only supported provider)")
         .Define(OrleansConnectorConfig.StreamNamespace, ConfigType.String, Importance.High,
             "Orleans stream namespace")
         .Define(OrleansConnectorConfig.StreamId, ConfigType.String,
@@ -39,10 +39,7 @@ public sealed class OrleansSourceConnector : SourceConnector
             "Orleans stream GUID (derived from topic name if not provided)")
         .Define(OrleansConnectorConfig.BatchSize, ConfigType.Int,
             OrleansConnectorConfig.DefaultBatchSize, Importance.Low,
-            "Maximum records per poll")
-        .Define(OrleansConnectorConfig.SerializationType, ConfigType.String,
-            OrleansConnectorConfig.DefaultSerializationType, Importance.Low,
-            "Serialization type: json or binary");
+            "Maximum records per poll");
 
     private readonly Dictionary<string, string> _config = new();
 

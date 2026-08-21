@@ -111,28 +111,47 @@ public sealed class ServiceBusSinkTask : SinkTask
             _messageBuffer.Clear();
         }
 
-        // Send in batches
-        using var batch = await _sender.CreateMessageBatchAsync(cancellationToken);
+        await SendBufferedMessagesAsync(_sender, messages, cancellationToken);
+    }
 
-        foreach (var message in messages)
+    internal static async Task SendBufferedMessagesAsync(
+        ServiceBusSender sender,
+        IReadOnlyList<ServiceBusMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        // Send in batches - a sent batch must never be reused, or its messages get re-sent
+        var batch = await sender.CreateMessageBatchAsync(cancellationToken);
+        try
         {
-            if (!batch.TryAddMessage(message))
+            foreach (var message in messages)
             {
-                // Batch is full, send it and start a new one
+                if (batch.TryAddMessage(message))
+                    continue;
+
+                // Batch is full: send it and start a fresh one for the remaining messages
                 if (batch.Count > 0)
                 {
-                    await _sender.SendMessagesAsync(batch, cancellationToken);
+                    await sender.SendMessagesAsync(batch, cancellationToken);
+                    batch.Dispose();
+                    batch = await sender.CreateMessageBatchAsync(cancellationToken);
                 }
 
-                // Send the message that didn't fit individually
-                await _sender.SendMessageAsync(message, cancellationToken);
+                if (!batch.TryAddMessage(message))
+                {
+                    // The message alone exceeds the batch limit - send it individually
+                    await sender.SendMessageAsync(message, cancellationToken);
+                }
+            }
+
+            // Send remaining messages in batch
+            if (batch.Count > 0)
+            {
+                await sender.SendMessagesAsync(batch, cancellationToken);
             }
         }
-
-        // Send remaining messages in batch
-        if (batch.Count > 0)
+        finally
         {
-            await _sender.SendMessagesAsync(batch, cancellationToken);
+            batch.Dispose();
         }
     }
 

@@ -161,11 +161,19 @@ public sealed class SqsSourceTask : SourceTask
                 ReceiptHandle = handle
             }).ToList();
 
-            await _sqsClient.DeleteMessageBatchAsync(new DeleteMessageBatchRequest
+            var response = await _sqsClient.DeleteMessageBatchAsync(new DeleteMessageBatchRequest
             {
                 QueueUrl = _queueUrl,
                 Entries = entries
             }, cancellationToken);
+
+            // Failed deletes only cause redelivery (duplicates), but must not stay invisible
+            if (response.Failed is { Count: > 0 })
+            {
+                var details = string.Join("; ", response.Failed.Select(f => $"{f.Id}: {f.Code} {f.Message}"));
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"SQS failed to delete {response.Failed.Count} of {entries.Count} messages (they will be redelivered): {details}"));
+            }
         }
     }
 

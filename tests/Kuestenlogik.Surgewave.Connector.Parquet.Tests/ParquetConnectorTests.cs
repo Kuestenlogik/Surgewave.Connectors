@@ -378,6 +378,162 @@ public class ParquetConnectorTests : IDisposable
         Assert.Equal("Test User", root.GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task ParquetSinkTask_RollingModeKeepsRowsAcrossFlushes()
+    {
+        var outputDir = Path.Combine(_testDir, "rolling");
+
+        var task = new ParquetSinkTask();
+        var context = new TaskContext { RaiseError = _ => { } };
+        task.Initialize(context);
+        task.Start(new Dictionary<string, string>
+        {
+            [ParquetConnectorConfig.OutputPath] = outputDir,
+            [ParquetConnectorConfig.OutputMode] = ParquetConnectorConfig.OutputModeRolling,
+            [ParquetConnectorConfig.MaxRecordsPerFile] = "1000"
+        });
+
+        // The Connect runner flushes after every record — earlier flushes must survive
+        await task.PutAsync([CreateSinkRecord(new { id = 1 })], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+        await task.PutAsync([CreateSinkRecord(new { id = 2 })], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        task.Stop();
+        task.Dispose();
+
+        var files = Directory.GetFiles(outputDir, "*.parquet");
+        Assert.Single(files);
+        Assert.Equal(2, await CountRowsAsync(files[0]));
+    }
+
+    [Fact]
+    public async Task ParquetSinkTask_AppendModePreservesEarlierFlushes()
+    {
+        var outputPath = Path.Combine(_testDir, "append.parquet");
+
+        var task = new ParquetSinkTask();
+        var context = new TaskContext { RaiseError = _ => { } };
+        task.Initialize(context);
+        task.Start(new Dictionary<string, string>
+        {
+            [ParquetConnectorConfig.OutputPath] = outputPath,
+            [ParquetConnectorConfig.OutputMode] = ParquetConnectorConfig.OutputModeAppend
+        });
+
+        await task.PutAsync([CreateSinkRecord(new { id = 1 })], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+        await task.PutAsync([CreateSinkRecord(new { id = 2 })], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        task.Stop();
+        task.Dispose();
+
+        Assert.Equal(2, await CountRowsAsync(outputPath));
+    }
+
+    [Fact]
+    public async Task ParquetSinkTask_AppendToUnreadableFileThrows()
+    {
+        var outputPath = Path.Combine(_testDir, "corrupt.parquet");
+        await File.WriteAllTextAsync(outputPath, "this is not a parquet file");
+
+        var task = new ParquetSinkTask();
+        var errors = new List<Exception>();
+        var context = new TaskContext { RaiseError = errors.Add };
+        task.Initialize(context);
+        task.Start(new Dictionary<string, string>
+        {
+            [ParquetConnectorConfig.OutputPath] = outputPath,
+            [ParquetConnectorConfig.OutputMode] = ParquetConnectorConfig.OutputModeAppend
+        });
+
+        await task.PutAsync([CreateSinkRecord(new { id = 1 })], CancellationToken.None);
+
+        // An unreadable existing file must fail the flush loudly instead of
+        // silently discarding all previously written rows
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None));
+
+        // Dispose surfaces the still-buffered rows via RaiseError but must not throw
+        task.Dispose();
+        Assert.NotEmpty(errors);
+    }
+
+    [Fact]
+    public async Task ParquetSinkTask_SchemaIncludesFieldsFromAllBufferedRecords()
+    {
+        var outputPath = Path.Combine(_testDir, "union.parquet");
+
+        var task = new ParquetSinkTask();
+        var context = new TaskContext { RaiseError = _ => { } };
+        task.Initialize(context);
+        task.Start(new Dictionary<string, string>
+        {
+            [ParquetConnectorConfig.OutputPath] = outputPath,
+            [ParquetConnectorConfig.OutputMode] = ParquetConnectorConfig.OutputModeOverwrite
+        });
+
+        await task.PutAsync(
+        [
+            CreateSinkRecord(new { id = 1 }),
+            CreateSinkRecord(new { id = 2, name = "Bob" })
+        ], CancellationToken.None);
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+
+        task.Stop();
+        task.Dispose();
+
+        using var reader = await ParquetReader.CreateAsync(outputPath);
+        var fieldNames = reader.Schema.DataFields.Select(f => f.Name).ToArray();
+        Assert.Contains("id", fieldNames);
+        Assert.Contains("name", fieldNames);
+    }
+
+    [Fact]
+    public async Task ParquetSourceTask_DeleteAfterReadDeletesOnlyAfterCommit()
+    {
+        var filePath = Path.Combine(_testDir, "delete-after-read.parquet");
+        await CreateTestParquetFileAsync(filePath);
+
+        var task = new ParquetSourceTask();
+        var context = new TaskContext { RaiseError = _ => { } };
+        task.Initialize(context);
+        task.Start(new Dictionary<string, string>
+        {
+            [ParquetConnectorConfig.FilePath] = filePath,
+            [ParquetConnectorConfig.Topic] = "test-topic",
+            [ParquetConnectorConfig.DeleteAfterRead] = "true"
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var records = await task.PollAsync(cts.Token);
+
+        Assert.Equal(3, records.Count);
+
+        // The file must survive until the records have been produced and committed
+        Assert.True(File.Exists(filePath));
+
+        await task.CommitAsync(cts.Token);
+
+        Assert.False(File.Exists(filePath));
+
+        task.Stop();
+        task.Dispose();
+    }
+
+    private static async Task<long> CountRowsAsync(string filePath)
+    {
+        using var reader = await ParquetReader.CreateAsync(filePath);
+        long rows = 0;
+        for (var i = 0; i < reader.RowGroupCount; i++)
+        {
+            using var groupReader = reader.OpenRowGroupReader(i);
+            rows += groupReader.RowCount;
+        }
+        return rows;
+    }
+
     private static async Task CreateTestParquetFileAsync(string filePath)
     {
         var schema = new ParquetSchema(

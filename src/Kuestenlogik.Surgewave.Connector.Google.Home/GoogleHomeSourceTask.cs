@@ -79,9 +79,12 @@ public sealed class GoogleHomeSourceTask : SourceTask
 
     public override async Task<IReadOnlyList<SourceRecord>> PollAsync(CancellationToken cancellationToken)
     {
-        if ((DateTime.UtcNow - _lastPoll).TotalMilliseconds < _pollIntervalMs)
+        // Wait out the remaining poll interval instead of returning [] immediately,
+        // which would let the worker's poll loop busy-spin between intervals.
+        var sinceLastPoll = DateTime.UtcNow - _lastPoll;
+        if (sinceLastPoll.TotalMilliseconds < _pollIntervalMs)
         {
-            return [];
+            await Task.Delay(Math.Max(100, _pollIntervalMs - (int)sinceLastPoll.TotalMilliseconds), cancellationToken);
         }
 
         _lastPoll = DateTime.UtcNow;
@@ -89,6 +92,10 @@ public sealed class GoogleHomeSourceTask : SourceTask
 
         try
         {
+            // One Sync request per poll supplies both the device list and the type
+            // metadata (previously an extra Sync round-trip was issued per device).
+            var deviceTypes = await GetDeviceTypesAsync(cancellationToken);
+
             // Query device states
             var queryRequest = new QueryRequest
             {
@@ -99,7 +106,7 @@ public sealed class GoogleHomeSourceTask : SourceTask
                     {
                         Payload = new QueryRequestPayload
                         {
-                            Devices = await GetDeviceListAsync(cancellationToken)
+                            Devices = deviceTypes.Keys.Select(id => new AgentDeviceId { Id = id }).ToList()
                         }
                     }
                 }
@@ -122,61 +129,43 @@ public sealed class GoogleHomeSourceTask : SourceTask
 
                 _lastStates[deviceId] = stateJson;
 
-                // Get device metadata for type info
-                var deviceType = await GetDeviceTypeAsync(deviceId, cancellationToken);
+                var deviceType = deviceTypes.TryGetValue(deviceId, out var type) ? type : "unknown";
                 if (!ShouldIncludeDeviceType(deviceType))
                     continue;
 
                 records.Add(CreateDeviceRecord(deviceId, deviceType, deviceState));
             }
         }
-        catch (Exception)
+        catch (OperationCanceledException)
         {
-            // Log and continue
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // Surface poll failures (bad credentials, unreachable Home Graph, ...)
+            // instead of silently producing nothing forever.
+            Context?.RaiseError?.Invoke(ex);
         }
 
         return records;
     }
 
-    private async Task<List<AgentDeviceId>> GetDeviceListAsync(CancellationToken ct)
+    private async Task<Dictionary<string, string>> GetDeviceTypesAsync(CancellationToken ct)
     {
-        var devices = new List<AgentDeviceId>();
+        var devices = new Dictionary<string, string>();
 
-        try
+        var syncRequest = new SyncRequest { AgentUserId = _agentUserId };
+        var syncResponse = await _service!.Devices.Sync(syncRequest).ExecuteAsync(ct);
+
+        if (syncResponse?.Payload?.Devices != null)
         {
-            var syncRequest = new SyncRequest { AgentUserId = _agentUserId };
-            var syncResponse = await _service!.Devices.Sync(syncRequest).ExecuteAsync(ct);
-
-            if (syncResponse?.Payload?.Devices != null)
+            foreach (var device in syncResponse.Payload.Devices)
             {
-                foreach (var device in syncResponse.Payload.Devices)
-                {
-                    devices.Add(new AgentDeviceId { Id = device.Id });
-                }
+                devices[device.Id] = device.Type ?? "unknown";
             }
-        }
-        catch (Exception)
-        {
-            // Log and continue
         }
 
         return devices;
-    }
-
-    private async Task<string> GetDeviceTypeAsync(string deviceId, CancellationToken ct)
-    {
-        try
-        {
-            var syncRequest = new SyncRequest { AgentUserId = _agentUserId };
-            var syncResponse = await _service!.Devices.Sync(syncRequest).ExecuteAsync(ct);
-
-            var device = syncResponse?.Payload?.Devices?.FirstOrDefault(d => d.Id == deviceId);
-            return device?.Type ?? "unknown";
-        }
-        catch (Exception)
-        {
-            return "unknown";
-        }
     }
 
     private bool ShouldIncludeDeviceType(string deviceType)

@@ -43,6 +43,26 @@ public sealed class LanguageSinkTaskTests
     }
 
     [Fact]
+    public void LanguageSinkTask_OverridesFlushAsync_ToDrainBufferedRecords()
+    {
+        // The worker commits offsets right after FlushAsync - a buffered sink must
+        // drain its buffer there, not only when the batch size is reached
+        var flushAsync = typeof(LanguageSinkTask).GetMethod(nameof(SinkTask.FlushAsync));
+
+        Assert.NotNull(flushAsync);
+        Assert.Equal(typeof(LanguageSinkTask), flushAsync!.DeclaringType);
+    }
+
+    [Fact]
+    public async Task LanguageSinkTask_FlushAsync_CompletesWithEmptyBufferBeforeStart()
+    {
+        using var task = new LanguageSinkTask();
+        task.Initialize(CreateTaskContext());
+
+        await task.FlushAsync(new Dictionary<TopicPartition, long>(), CancellationToken.None);
+    }
+
+    [Fact]
     public void LanguageConnectorConfig_HasCorrectTopicsConfig()
     {
         Assert.Equal("topics", LanguageConnectorConfig.TopicsConfig);

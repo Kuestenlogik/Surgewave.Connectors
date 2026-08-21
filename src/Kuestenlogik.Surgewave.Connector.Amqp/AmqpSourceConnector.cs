@@ -36,6 +36,9 @@ public sealed class AmqpSourceConnector : SourceConnector
             "AMQP password")
         .Define(AmqpConnectorConfig.UseSsl, ConfigType.Boolean, "false", Importance.Medium,
             "Enable SSL/TLS")
+        .Define(AmqpConnectorConfig.RequestedHeartbeat, ConfigType.Int,
+            AmqpConnectorConfig.DefaultHeartbeatSeconds.ToString(), Importance.Low,
+            "Requested heartbeat interval in seconds")
         .Define(AmqpConnectorConfig.SourceQueue, ConfigType.String, Importance.High,
             "Queue to consume from")
         .Define(AmqpConnectorConfig.SourceExchange, ConfigType.String, "", Importance.Medium,

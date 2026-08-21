@@ -217,6 +217,10 @@ public sealed class GraphQLSourceTask : SourceTask
                                 }
                                 break;
                             case "error":
+                                // Surface subscription errors instead of dropping them
+                                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                                    $"GraphQL subscription error: {message.GetRawText()}"));
+                                break;
                             case "complete":
                                 // Connection ended
                                 break;
@@ -231,6 +235,14 @@ public sealed class GraphQLSourceTask : SourceTask
             catch (WebSocketException)
             {
                 // Reconnect after delay
+                await Task.Delay(5000, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                // A missing connection_ack or a malformed frame must not fault the
+                // reader task for good (the source would silently return [] forever) -
+                // surface the error and reconnect.
+                Context?.RaiseError?.Invoke(ex);
                 await Task.Delay(5000, cancellationToken);
             }
             finally
@@ -322,7 +334,10 @@ public sealed class GraphQLSourceTask : SourceTask
 
             if (response.Errors?.Length > 0)
             {
-                // Log errors but don't fail
+                // Surface query errors - a permanently failing query must not look
+                // like an empty source.
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"GraphQL query failed: {JsonSerializer.Serialize(response.Errors)}"));
                 _lastPollTime = DateTimeOffset.UtcNow;
                 return [];
             }
@@ -332,10 +347,9 @@ public sealed class GraphQLSourceTask : SourceTask
 
             foreach (var element in dataElements)
             {
-                var record = CreateRecord(element);
-                records.Add(record);
-
-                // Track cursor
+                // Advance the cursor before creating the record so its SourceOffset
+                // carries this record's own position - stamping the previous cursor
+                // would re-fetch the last committed record after a restart.
                 if (!string.IsNullOrWhiteSpace(_timestampField) &&
                     element.TryGetProperty(_timestampField, out var tsValue))
                 {
@@ -346,13 +360,16 @@ public sealed class GraphQLSourceTask : SourceTask
                 {
                     _lastId = idValue.ToString();
                 }
+
+                records.Add(CreateRecord(element));
             }
 
             _lastPollTime = DateTimeOffset.UtcNow;
             return records;
         }
-        catch (GraphQLHttpRequestException)
+        catch (GraphQLHttpRequestException ex)
         {
+            Context?.RaiseError?.Invoke(ex);
             await Task.Delay(1000, cancellationToken);
             return [];
         }

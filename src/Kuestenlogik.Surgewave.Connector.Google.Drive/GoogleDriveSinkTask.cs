@@ -113,25 +113,46 @@ public sealed class GoogleDriveSinkTask : SinkTask
         try
         {
             var json = JsonSerializer.Deserialize<JsonObject>(record.Value);
-            if (json == null) return;
+            if (json == null)
+            {
+                RaisePoisonRecord(record, "record value is not a JSON object");
+                return;
+            }
 
             var fileName = json[_fileNameField]?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(fileName)) return;
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                RaisePoisonRecord(record, $"missing or empty '{_fileNameField}' field");
+                return;
+            }
 
             var contentStr = json[_contentField]?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(contentStr)) return;
+            if (string.IsNullOrWhiteSpace(contentStr))
+            {
+                RaisePoisonRecord(record, $"missing or empty '{_contentField}' field");
+                return;
+            }
 
             var mimeType = json[_mimeTypeField]?.GetValue<string>() ?? GoogleDriveConnectorConfig.DefaultMimeType;
 
-            // Decode content (assume base64)
+            // Decode content: only treat it as base64 when the record says so -
+            // base64-sniffing corrupts plain text that happens to be valid base64.
             byte[] content;
-            try
+            var contentEncoding = json["contentEncoding"]?.GetValue<string>();
+            if (string.Equals(contentEncoding, "base64", StringComparison.OrdinalIgnoreCase))
             {
-                content = Convert.FromBase64String(contentStr);
+                try
+                {
+                    content = Convert.FromBase64String(contentStr);
+                }
+                catch (FormatException)
+                {
+                    RaisePoisonRecord(record, "contentEncoding is 'base64' but the content is not valid base64");
+                    return;
+                }
             }
-            catch
+            else
             {
-                // If not base64, use as UTF-8
                 content = System.Text.Encoding.UTF8.GetBytes(contentStr);
             }
 
@@ -139,8 +160,15 @@ public sealed class GoogleDriveSinkTask : SinkTask
         }
         catch (JsonException)
         {
-            // Invalid JSON, skip record
+            // Poison record: skip it, but make it visible instead of silently dropping it
+            RaisePoisonRecord(record, "record value is not valid JSON");
         }
+    }
+
+    private void RaisePoisonRecord(SinkRecord record, string reason)
+    {
+        Context?.RaiseError?.Invoke(new InvalidOperationException(
+            $"Skipping record {record.Topic}-{record.Partition}@{record.Offset}: {reason}"));
     }
 
     private async Task UploadFileAsync(string fileName, byte[] content, string mimeType, CancellationToken cancellationToken)

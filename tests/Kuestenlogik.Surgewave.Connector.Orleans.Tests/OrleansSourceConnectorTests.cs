@@ -32,7 +32,9 @@ public class OrleansSourceConnectorTests
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamNamespace);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamId);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.BatchSize);
-        Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.SerializationType);
+
+        // serialization.type was advertised but never read by any task — it must stay removed
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == "serialization.type");
     }
 
     [Fact]

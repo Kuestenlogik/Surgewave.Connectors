@@ -94,11 +94,13 @@ public sealed class TableStorageSinkTask : SinkTask
             _tableVerified = true;
         }
 
-        // Group by partition key for efficient batching
+        // Group by partition key for efficient batching; tombstones (null/empty value)
+        // carry their keys in the record key instead of the value
         var byPartition = new Dictionary<string, List<SinkRecord>>();
         foreach (var record in records)
         {
-            var entity = ParseEntity(record);
+            var isTombstone = record.Value == null || record.Value.Length == 0;
+            var entity = isTombstone ? ParseKeyFromRecord(record) : ParseEntity(record);
             if (entity == null)
                 continue;
 
@@ -130,23 +132,20 @@ public sealed class TableStorageSinkTask : SinkTask
 
         foreach (var record in batch)
         {
-            var entity = ParseEntity(record);
-            if (entity == null)
-                continue;
-
-            // Handle tombstones (null/empty value = delete)
+            // Handle tombstones (null/empty value = delete, in every write mode)
             if (record.Value == null || record.Value.Length == 0)
             {
-                if (_writeMode != TableStorageConnectorConfig.WriteModeDelete)
+                var deleteEntity = ParseKeyFromRecord(record);
+                if (deleteEntity != null)
                 {
-                    var deleteEntity = ParseKeyFromRecord(record);
-                    if (deleteEntity != null)
-                    {
-                        actions.Add(new TableTransactionAction(TableTransactionActionType.Delete, deleteEntity, ETag.All));
-                    }
+                    actions.Add(new TableTransactionAction(TableTransactionActionType.Delete, deleteEntity, ETag.All));
                 }
                 continue;
             }
+
+            var entity = ParseEntity(record);
+            if (entity == null)
+                continue;
 
             var actionType = _writeMode switch
             {
@@ -173,26 +172,24 @@ public sealed class TableStorageSinkTask : SinkTask
                 await _tableClient!.SubmitTransactionAsync(actions, cancellationToken);
                 return;
             }
-            catch (RequestFailedException ex) when (ex.Status == 409 && _writeMode == TableStorageConnectorConfig.WriteModeInsert)
-            {
-                // Conflict on insert - entity already exists, skip
-                return;
-            }
-            catch (RequestFailedException ex) when (ex.Status == 404 && _writeMode == TableStorageConnectorConfig.WriteModeUpdate)
-            {
-                // Not found on update - entity doesn't exist, skip
-                return;
-            }
-            catch (RequestFailedException ex) when (IsTransient(ex.Status) && retries < _maxRetryCount)
+            catch (TableTransactionFailedException ex) when (IsTransient(ex.Status) && retries < _maxRetryCount)
             {
                 retries++;
                 await Task.Delay(TimeSpan.FromMilliseconds(_retryDelayMs * retries), cancellationToken);
             }
             catch (TableTransactionFailedException)
             {
-                // Batch failed - fall back to individual operations
+                // One entity failed the atomic batch (e.g. 409 conflict on insert) - fall back
+                // to individual operations so the other entities still get written.
+                // This catch must come before RequestFailedException filters:
+                // TableTransactionFailedException derives from RequestFailedException.
                 await ProcessIndividuallyAsync(actions, cancellationToken);
                 return;
+            }
+            catch (RequestFailedException ex) when (IsTransient(ex.Status) && retries < _maxRetryCount)
+            {
+                retries++;
+                await Task.Delay(TimeSpan.FromMilliseconds(_retryDelayMs * retries), cancellationToken);
             }
         }
     }

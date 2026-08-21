@@ -18,7 +18,7 @@ public sealed class LanguageSinkConnector : SinkConnector
     public override ConfigDef Config => new ConfigDef()
         // Connection configs
         .Define(LanguageConnectorConfig.ProjectIdConfig, ConfigType.String, "", Importance.Medium,
-            "GCP project ID (optional, uses default if not specified)")
+            "GCP project ID to bill requests against (optional, uses the credential's project if not specified)")
         .Define(LanguageConnectorConfig.CredentialsJsonConfig, ConfigType.Password, "", Importance.Medium,
             "GCP service account JSON credentials (inline)")
         .Define(LanguageConnectorConfig.CredentialsPathConfig, ConfigType.String, "", Importance.Medium,

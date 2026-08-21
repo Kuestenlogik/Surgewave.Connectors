@@ -184,9 +184,11 @@ public sealed class FirestoreSinkTask : SinkTask
                     break;
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Invalid JSON, skip this record
+            // Poison record - skip it, but surface the problem instead of dropping it silently
+            Context?.RaiseError?.Invoke(new InvalidOperationException(
+                $"Skipping record {record.Topic}-{record.Partition}@{record.Offset}: value is not valid JSON", ex));
         }
     }
 
@@ -285,7 +287,7 @@ public sealed class FirestoreSinkTask : SinkTask
         };
     }
 
-    private static object? ConvertJsonElement(JsonElement element)
+    internal static object? ConvertJsonElement(JsonElement element)
     {
         return element.ValueKind switch
         {
@@ -311,7 +313,7 @@ public sealed class FirestoreSinkTask : SinkTask
         return value;
     }
 
-    private static Dictionary<string, object?> ConvertJsonObject(JsonElement element)
+    private static object ConvertJsonObject(JsonElement element)
     {
         var result = new Dictionary<string, object?>();
 
@@ -320,17 +322,35 @@ public sealed class FirestoreSinkTask : SinkTask
             result[prop.Name] = ConvertJsonElement(prop.Value);
         }
 
-        // Check for GeoPoint structure
-        if (result.TryGetValue("lat", out var latValue) && result.TryGetValue("lng", out var lngValue) &&
-            latValue is double lat && lngValue is double lng)
+        // An object consisting solely of numeric lat/lng becomes the GeoPoint field value itself;
+        // any other object keeps all of its fields.
+        if (result.Count == 2 &&
+            TryGetCoordinate(result, "lat", out var lat) &&
+            TryGetCoordinate(result, "lng", out var lng))
         {
-            return new Dictionary<string, object?>
-            {
-                ["_geopoint"] = new GeoPoint(lat, lng)
-            };
+            return new GeoPoint(lat, lng);
         }
 
         return result;
+    }
+
+    private static bool TryGetCoordinate(Dictionary<string, object?> values, string key, out double coordinate)
+    {
+        if (values.TryGetValue(key, out var value))
+        {
+            switch (value)
+            {
+                case double d:
+                    coordinate = d;
+                    return true;
+                case long l:
+                    coordinate = l;
+                    return true;
+            }
+        }
+
+        coordinate = 0;
+        return false;
     }
 
     public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)

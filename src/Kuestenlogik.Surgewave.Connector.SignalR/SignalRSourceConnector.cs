@@ -18,6 +18,9 @@ public sealed class SignalRSourceConnector : SourceConnector
             "SignalR hub URL")
         .Define(SignalRConfig.Method, ConfigType.String, "ReceiveMessage", Importance.High,
             "Hub method to subscribe to")
+        .Define(SignalRConfig.MessageFormat, ConfigType.String, SignalRConfig.DefaultMessageFormat, Importance.Medium,
+            "Incoming message shape: key-value (string key + string value), value-only (single string), json (single JSON argument)",
+            EditorHint.Select, options: ["key-value", "value-only", "json"])
         .Define(SignalRConfig.ReconnectEnabled, ConfigType.Boolean, true, Importance.Medium,
             "Enable automatic reconnection")
         .Define(SignalRConfig.ReconnectDelayMs, ConfigType.Long, 1000L, Importance.Low,

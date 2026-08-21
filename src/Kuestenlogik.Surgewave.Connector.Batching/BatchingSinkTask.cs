@@ -8,10 +8,19 @@ using Kuestenlogik.Surgewave.Connect;
 
 /// <summary>
 /// A sink task that aggregates incoming records into batches based on count, size, or timeout.
-/// Batched records can be retrieved via the GetBatches method or via the OnBatchReady callback.
+/// When deployed standalone, completed batches are published to the configured
+/// <c>batch.output.topic</c>; when embedded, they can be consumed via the GetBatches
+/// method or the OnBatchReady callback instead.
 /// </summary>
 public sealed class BatchingSinkTask : SinkTask
 {
+    /// <summary>
+    /// Upper bound on completed batches retained for <see cref="GetBatches"/> when no
+    /// output topic is configured and no <see cref="OnBatchReady"/> subscriber exists.
+    /// </summary>
+    private const int MaxRetainedBatches = 1000;
+
+    private string? _outputTopic;
     private int _batchMaxMessages = BatchingConnectorConfig.DefaultBatchMaxMessages;
     private long _batchMaxBytes = BatchingConnectorConfig.DefaultBatchMaxBytes;
     private int _batchTimeoutMs = BatchingConnectorConfig.DefaultBatchTimeoutMs;
@@ -41,6 +50,9 @@ public sealed class BatchingSinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        if (config.TryGetValue(BatchingConnectorConfig.OutputTopicConfig, out var outputTopic) && !string.IsNullOrEmpty(outputTopic))
+            _outputTopic = outputTopic;
+
         if (config.TryGetValue(BatchingConnectorConfig.BatchMaxMessagesConfig, out var maxMessages))
             _batchMaxMessages = int.Parse(maxMessages);
 
@@ -73,6 +85,7 @@ public sealed class BatchingSinkTask : SinkTask
     {
         // Flush any remaining records
         FlushInternal();
+        DeliverCompletedBatchesAsync(CancellationToken.None).GetAwaiter().GetResult();
 
         _buffer.Clear();
         _keys.Clear();
@@ -81,7 +94,7 @@ public sealed class BatchingSinkTask : SinkTask
         _lastKey = null;
     }
 
-    public override Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
+    public override async Task PutAsync(IReadOnlyList<SinkRecord> records, CancellationToken cancellationToken)
     {
         foreach (var record in records)
         {
@@ -94,7 +107,58 @@ public sealed class BatchingSinkTask : SinkTask
             FlushInternal();
         }
 
-        return Task.CompletedTask;
+        await DeliverCompletedBatchesAsync(cancellationToken);
+    }
+
+    public override async Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Complete the in-progress batch and deliver everything before the runtime
+        // commits consumer offsets, so a crash cannot lose acknowledged records.
+        FlushInternal();
+        await DeliverCompletedBatchesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Hands completed batches to their delivery path: the configured output topic,
+    /// the <see cref="OnBatchReady"/> subscribers, or the <see cref="GetBatches"/> pull API.
+    /// </summary>
+    private async Task DeliverCompletedBatchesAsync(CancellationToken cancellationToken)
+    {
+        if (_completedBatches.Count == 0)
+            return;
+
+        if (!string.IsNullOrEmpty(_outputTopic))
+        {
+            var producer = Context?.Producer
+                ?? throw new InvalidOperationException(
+                    $"'{BatchingConnectorConfig.OutputTopicConfig}' is configured but the runtime provided no producer to deliver batches with.");
+
+            while (_completedBatches.Count > 0)
+            {
+                var batch = _completedBatches[0];
+                await producer.ProduceAsync(_outputTopic, batch.Key, batch.Value, cancellationToken);
+                _completedBatches.RemoveAt(0);
+            }
+
+            return;
+        }
+
+        if (OnBatchReady != null)
+        {
+            // Batches were already handed to the subscribers when they completed.
+            _completedBatches.Clear();
+            return;
+        }
+
+        // Embedded pull mode: retain batches for GetBatches(), but never without bound.
+        if (_completedBatches.Count > MaxRetainedBatches)
+        {
+            var error = new InvalidOperationException(
+                $"BatchingSinkTask holds {_completedBatches.Count} undelivered batches and has no delivery path. " +
+                $"Configure '{BatchingConnectorConfig.OutputTopicConfig}', subscribe to OnBatchReady, or drain GetBatches().");
+            Context?.RaiseError?.Invoke(error);
+            throw error;
+        }
     }
 
     /// <summary>

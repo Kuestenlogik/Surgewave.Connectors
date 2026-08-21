@@ -19,6 +19,8 @@ public sealed class TextAnalyticsSinkTask : SinkTask
     private string _inputField = TextAnalyticsConnectorConfig.DefaultInputField;
     private string _outputField = TextAnalyticsConnectorConfig.DefaultOutputField;
     private string _language = TextAnalyticsConnectorConfig.DefaultLanguage;
+    private string[] _piiCategories = [];
+    private string _piiDomain = TextAnalyticsConnectorConfig.PiiDomainDefault;
     private bool _includeOriginal = TextAnalyticsConnectorConfig.DefaultIncludeOriginal;
     private string _outputFormat = TextAnalyticsConnectorConfig.FormatMerge;
     private string? _webhookUrl;
@@ -55,6 +57,15 @@ public sealed class TextAnalyticsSinkTask : SinkTask
         _language = config.TryGetValue(TextAnalyticsConnectorConfig.LanguageConfig, out var language)
             ? language
             : TextAnalyticsConnectorConfig.DefaultLanguage;
+
+        // Read PII config
+        _piiCategories = config.TryGetValue(TextAnalyticsConnectorConfig.PiiCategoriesConfig, out var piiCategories) && !string.IsNullOrEmpty(piiCategories)
+            ? piiCategories.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [];
+
+        _piiDomain = config.TryGetValue(TextAnalyticsConnectorConfig.PiiDomainConfig, out var piiDomain) && !string.IsNullOrEmpty(piiDomain)
+            ? piiDomain
+            : TextAnalyticsConnectorConfig.PiiDomainDefault;
 
         // Read summarization config
         _maxSentenceCount = config.TryGetValue(TextAnalyticsConnectorConfig.MaxSentenceCountConfig, out var maxSentences) && int.TryParse(maxSentences, out var ms)
@@ -134,6 +145,13 @@ public sealed class TextAnalyticsSinkTask : SinkTask
         }
     }
 
+    public override Task FlushAsync(IDictionary<TopicPartition, long> currentOffsets, CancellationToken cancellationToken)
+    {
+        // Drain the buffer before the runtime commits consumer offsets so a crash
+        // cannot lose records that were already acknowledged.
+        return FlushBufferAsync(cancellationToken);
+    }
+
     private async Task FlushBufferAsync(CancellationToken cancellationToken)
     {
         if (_buffer.Count == 0 || _client == null) return;
@@ -163,8 +181,14 @@ public sealed class TextAnalyticsSinkTask : SinkTask
             case TextAnalyticsConnectorConfig.ModeLinkedEntities:
                 await ProcessLinkedEntitiesAsync(recordsToProcess, cancellationToken);
                 break;
+            case TextAnalyticsConnectorConfig.ModeHealthcare:
+                await ProcessHealthcareAsync(recordsToProcess, cancellationToken);
+                break;
             case TextAnalyticsConnectorConfig.ModeSummarization:
                 await ProcessSummarizationAsync(recordsToProcess, cancellationToken);
+                break;
+            case TextAnalyticsConnectorConfig.ModeAbstractiveSummarization:
+                await ProcessAbstractiveSummarizationAsync(recordsToProcess, cancellationToken);
                 break;
             default:
                 await ProcessSentimentAsync(recordsToProcess, cancellationToken);
@@ -412,6 +436,16 @@ public sealed class TextAnalyticsSinkTask : SinkTask
 
         if (documents.Count == 0) return;
 
+        var options = new RecognizePiiEntitiesOptions();
+        if (_piiDomain == TextAnalyticsConnectorConfig.PiiDomainHealthcare)
+        {
+            options.DomainFilter = PiiEntityDomain.ProtectedHealthInformation;
+        }
+        foreach (var category in _piiCategories)
+        {
+            options.CategoriesFilter.Add(new PiiEntityCategory(category));
+        }
+
         for (var attempt = 0; attempt <= _retryMax; attempt++)
         {
             try
@@ -419,7 +453,8 @@ public sealed class TextAnalyticsSinkTask : SinkTask
                 var response = await _client.RecognizePiiEntitiesBatchAsync(
                     documents.Select(d => d.Text),
                     _language,
-                    cancellationToken: cancellationToken);
+                    options,
+                    cancellationToken);
 
                 var results = response.Value.ToList();
                 for (var i = 0; i < results.Count; i++)
@@ -531,51 +566,188 @@ public sealed class TextAnalyticsSinkTask : SinkTask
     {
         if (_client == null) return;
 
-        // Extractive summarization uses a long-running operation via AnalyzeActions
-        // For simplicity, we'll use key phrase extraction as a summary alternative
-        // since the ExtractiveSummarize API requires async operations
+        var documents = new List<(SinkRecord Record, string Text)>();
         foreach (var record in records)
+        {
+            var text = ExtractInputText(record);
+            if (!string.IsNullOrEmpty(text))
+            {
+                documents.Add((record, text));
+            }
+        }
+
+        if (documents.Count == 0) return;
+
+        var options = new ExtractiveSummarizeOptions { MaxSentenceCount = _maxSentenceCount };
+
+        for (var attempt = 0; attempt <= _retryMax; attempt++)
         {
             try
             {
-                var text = ExtractInputText(record);
-                if (string.IsNullOrEmpty(text)) continue;
+                var operation = await _client.ExtractiveSummarizeAsync(
+                    WaitUntil.Completed,
+                    documents.Select(d => d.Text),
+                    _language,
+                    options,
+                    cancellationToken);
 
-                for (var attempt = 0; attempt <= _retryMax; attempt++)
+                var documentIndex = 0;
+                await foreach (var resultCollection in operation.Value.WithCancellation(cancellationToken))
                 {
-                    try
+                    foreach (var documentResult in resultCollection)
                     {
-                        // Use key phrases as a summary representation
-                        var response = await _client.ExtractKeyPhrasesAsync(text, _language, cancellationToken);
+                        var record = documents[documentIndex++].Record;
+                        if (documentResult.HasError) continue;
 
-                        var keyPhrases = new JsonArray();
-                        foreach (var phrase in response.Value)
+                        var sentences = new JsonArray();
+                        foreach (var sentence in documentResult.Sentences)
                         {
-                            keyPhrases.Add(phrase);
+                            sentences.Add(new JsonObject
+                            {
+                                ["text"] = sentence.Text,
+                                ["rankScore"] = sentence.RankScore,
+                                ["offset"] = sentence.Offset,
+                                ["length"] = sentence.Length
+                            });
                         }
 
-                        // Create summary from first N key phrases
-                        var summary = string.Join(". ", response.Value.Take(_maxSentenceCount));
-
-                        var resultObj = new JsonObject
+                        var result = new JsonObject
                         {
-                            ["summary"] = summary,
-                            ["keyPhrases"] = keyPhrases
+                            ["summary"] = string.Join(" ", documentResult.Sentences.Select(s => s.Text)),
+                            ["sentences"] = sentences
                         };
 
-                        var output = BuildOutput(record, resultObj);
+                        var output = BuildOutput(record, result);
                         await OutputResultAsync(output, cancellationToken);
-                        break;
-                    }
-                    catch (Exception) when (attempt < _retryMax)
-                    {
-                        await Task.Delay(_retryBackoffMs * (attempt + 1), cancellationToken);
                     }
                 }
+                return;
             }
-            catch (Exception ex)
+            catch (Exception) when (attempt < _retryMax)
             {
-                Context.RaiseError?.Invoke(ex);
+                await Task.Delay(_retryBackoffMs * (attempt + 1), cancellationToken);
+            }
+        }
+    }
+
+    private async Task ProcessAbstractiveSummarizationAsync(List<SinkRecord> records, CancellationToken cancellationToken)
+    {
+        if (_client == null) return;
+
+        var documents = new List<(SinkRecord Record, string Text)>();
+        foreach (var record in records)
+        {
+            var text = ExtractInputText(record);
+            if (!string.IsNullOrEmpty(text))
+            {
+                documents.Add((record, text));
+            }
+        }
+
+        if (documents.Count == 0) return;
+
+        for (var attempt = 0; attempt <= _retryMax; attempt++)
+        {
+            try
+            {
+                var operation = await _client.AbstractiveSummarizeAsync(
+                    WaitUntil.Completed,
+                    documents.Select(d => d.Text),
+                    _language,
+                    cancellationToken: cancellationToken);
+
+                var documentIndex = 0;
+                await foreach (var resultCollection in operation.Value.WithCancellation(cancellationToken))
+                {
+                    foreach (var documentResult in resultCollection)
+                    {
+                        var record = documents[documentIndex++].Record;
+                        if (documentResult.HasError) continue;
+
+                        var summaries = new JsonArray();
+                        foreach (var summary in documentResult.Summaries)
+                        {
+                            summaries.Add(summary.Text);
+                        }
+
+                        var result = new JsonObject
+                        {
+                            ["summary"] = string.Join(" ", documentResult.Summaries.Select(s => s.Text)),
+                            ["summaries"] = summaries
+                        };
+
+                        var output = BuildOutput(record, result);
+                        await OutputResultAsync(output, cancellationToken);
+                    }
+                }
+                return;
+            }
+            catch (Exception) when (attempt < _retryMax)
+            {
+                await Task.Delay(_retryBackoffMs * (attempt + 1), cancellationToken);
+            }
+        }
+    }
+
+    private async Task ProcessHealthcareAsync(List<SinkRecord> records, CancellationToken cancellationToken)
+    {
+        if (_client == null) return;
+
+        var documents = new List<(SinkRecord Record, string Text)>();
+        foreach (var record in records)
+        {
+            var text = ExtractInputText(record);
+            if (!string.IsNullOrEmpty(text))
+            {
+                documents.Add((record, text));
+            }
+        }
+
+        if (documents.Count == 0) return;
+
+        for (var attempt = 0; attempt <= _retryMax; attempt++)
+        {
+            try
+            {
+                var operation = await _client.AnalyzeHealthcareEntitiesAsync(
+                    WaitUntil.Completed,
+                    documents.Select(d => d.Text),
+                    _language,
+                    cancellationToken: cancellationToken);
+
+                var documentIndex = 0;
+                await foreach (var resultCollection in operation.Value.WithCancellation(cancellationToken))
+                {
+                    foreach (var documentResult in resultCollection)
+                    {
+                        var record = documents[documentIndex++].Record;
+                        if (documentResult.HasError) continue;
+
+                        var entities = new JsonArray();
+                        foreach (var entity in documentResult.Entities)
+                        {
+                            entities.Add(new JsonObject
+                            {
+                                ["text"] = entity.Text,
+                                ["category"] = entity.Category.ToString(),
+                                ["subCategory"] = entity.SubCategory,
+                                ["confidenceScore"] = entity.ConfidenceScore,
+                                ["offset"] = entity.Offset,
+                                ["length"] = entity.Length,
+                                ["normalizedText"] = entity.NormalizedText
+                            });
+                        }
+
+                        var result = new JsonObject { ["healthcareEntities"] = entities };
+                        var output = BuildOutput(record, result);
+                        await OutputResultAsync(output, cancellationToken);
+                    }
+                }
+                return;
+            }
+            catch (Exception) when (attempt < _retryMax)
+            {
+                await Task.Delay(_retryBackoffMs * (attempt + 1), cancellationToken);
             }
         }
     }

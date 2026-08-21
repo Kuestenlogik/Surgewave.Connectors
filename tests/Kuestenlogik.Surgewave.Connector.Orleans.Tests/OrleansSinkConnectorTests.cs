@@ -30,10 +30,12 @@ public class OrleansSinkConnectorTests
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.ServiceId);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamProvider);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamNamespace);
-        Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamId);
-        Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.SerializationType);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.PublishTimeoutMs);
         Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.Retries);
+        Assert.Contains(connector.Config.Keys, k => k.Name == OrleansConnectorConfig.StreamId);
+
+        // serialization.type was advertised but never read by any task — it must stay removed
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == "serialization.type");
     }
 
     [Fact]

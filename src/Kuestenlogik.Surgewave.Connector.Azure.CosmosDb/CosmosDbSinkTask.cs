@@ -127,11 +127,8 @@ public sealed class CosmosDbSinkTask : SinkTask
     {
         if (record.Value == null || record.Value.Length == 0)
         {
-            // Tombstone - delete if we can extract the key
-            if (_writeMode != CosmosDbConnectorConfig.WriteModeDelete)
-            {
-                await DeleteFromKeyAsync(record, cancellationToken);
-            }
+            // Tombstone - delete if we can extract the key (in every write mode)
+            await DeleteFromKeyAsync(record, cancellationToken);
             return;
         }
 
@@ -215,9 +212,10 @@ public sealed class CosmosDbSinkTask : SinkTask
                     break;
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Invalid JSON, skip this record
+            // Poison record: invalid JSON can never be written - surface it and skip
+            Context?.RaiseError?.Invoke(ex);
         }
     }
 
@@ -255,9 +253,10 @@ public sealed class CosmosDbSinkTask : SinkTask
                 // Item doesn't exist, ignore
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Invalid key JSON, skip
+            // Poison tombstone: invalid key JSON - surface it and skip
+            Context?.RaiseError?.Invoke(ex);
         }
     }
 

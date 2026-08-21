@@ -32,7 +32,7 @@ internal static class PubSubConnectorConfig
     // Default values
     public const int DefaultMaxMessages = 100;
     public const int DefaultAckDeadlineSeconds = 10;
-    public const bool DefaultAutoAck = true;
+    public const bool DefaultAutoAck = false;
     public const int DefaultBatchSize = 100;
     public const int DefaultBatchDelayMs = 100;
     public const string DefaultHeaderPrefix = "pubsub.";

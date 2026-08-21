@@ -21,7 +21,6 @@ public sealed class GoogleDriveSourceTask : SourceTask
     private string _mode = GoogleDriveConnectorConfig.ModeSourceWatch;
     private string _topic = "";
     private string _folderId = GoogleDriveConnectorConfig.DefaultFolderId;
-    private bool _recursive = GoogleDriveConnectorConfig.DefaultRecursive;
     private string _filePattern = GoogleDriveConnectorConfig.DefaultFilePattern;
     private string[]? _mimeTypeFilter;
     private int _pollIntervalMs = GoogleDriveConnectorConfig.DefaultPollIntervalMs;
@@ -76,8 +75,15 @@ public sealed class GoogleDriveSourceTask : SourceTask
         if (config.TryGetValue(GoogleDriveConnectorConfig.FolderIdConfig, out var folderId))
             _folderId = folderId;
 
-        if (config.TryGetValue(GoogleDriveConnectorConfig.RecursiveConfig, out var recursive))
-            _recursive = bool.Parse(recursive);
+        // Honest surface: subfolder traversal was never implemented, so reject the
+        // option loudly instead of silently behaving like a non-recursive listing.
+        if (config.TryGetValue(GoogleDriveConnectorConfig.RecursiveConfig, out var recursive)
+            && bool.TryParse(recursive, out var isRecursive) && isRecursive)
+        {
+            throw new ArgumentException(
+                $"'{GoogleDriveConnectorConfig.RecursiveConfig}' is not supported: subfolder traversal is not implemented. " +
+                $"Point '{GoogleDriveConnectorConfig.FolderIdConfig}' at the subfolder instead.");
+        }
 
         if (config.TryGetValue(GoogleDriveConnectorConfig.FilePatternConfig, out var pattern))
             _filePattern = pattern;
@@ -108,6 +114,17 @@ public sealed class GoogleDriveSourceTask : SourceTask
 
         if (config.TryGetValue(GoogleDriveConnectorConfig.RetryBackoffMsConfig, out var retryBackoff))
             _retryBackoffMs = int.Parse(retryBackoff);
+
+        // Resume from the last committed changes token so a restart does not
+        // re-list and re-emit every file again.
+        var storedOffset = Context?.OffsetStorageReader?.Offset(new Dictionary<string, object> { ["folderId"] = _folderId });
+        if (storedOffset != null
+            && storedOffset.TryGetValue("startPageToken", out var storedToken)
+            && storedToken?.ToString() is { Length: > 0 } token)
+        {
+            _startPageToken = token;
+            _initialListDone = true;
+        }
     }
 
     public override void Stop()
@@ -150,37 +167,51 @@ public sealed class GoogleDriveSourceTask : SourceTask
 
         var records = new List<SourceRecord>();
         var query = BuildQuery();
+        string? pageToken = null;
 
-        var request = _driveService.Files.List();
-        request.Q = query;
-        request.Fields = "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, parents, webViewLink)";
-        request.PageSize = _batchSize;
-
-        for (var attempt = 0; attempt <= _retryMax; attempt++)
+        do
         {
-            try
-            {
-                var result = await request.ExecuteAsync(cancellationToken);
+            var request = _driveService.Files.List();
+            request.Q = query;
+            request.Fields = "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, parents, webViewLink)";
+            request.PageSize = _batchSize;
+            request.PageToken = pageToken;
 
-                foreach (var file in result.Files ?? [])
+            global::Google.Apis.Drive.v3.Data.FileList? result = null;
+
+            for (var attempt = 0; attempt <= _retryMax; attempt++)
+            {
+                try
                 {
-                    if (!MatchesPattern(file.Name)) continue;
-                    if (_mimeTypeFilter != null && !_mimeTypeFilter.Contains(file.MimeType)) continue;
-
-                    var record = await CreateSourceRecordAsync(file, "list", cancellationToken);
-                    if (record != null)
-                        records.Add(record);
+                    result = await request.ExecuteAsync(cancellationToken);
+                    break;
                 }
-
-                _initialListDone = true;
-                break;
+                catch (global::Google.GoogleApiException) when (attempt < _retryMax)
+                {
+                    await Task.Delay(_retryBackoffMs * (int)Math.Pow(2, attempt), cancellationToken);
+                }
             }
-            catch (global::Google.GoogleApiException) when (attempt < _retryMax)
+
+            if (result == null)
+                return records;
+
+            foreach (var file in result.Files ?? [])
             {
-                await Task.Delay(_retryBackoffMs * (int)Math.Pow(2, attempt), cancellationToken);
-            }
-        }
+                if (!MatchesPattern(file.Name)) continue;
+                if (_mimeTypeFilter != null && !_mimeTypeFilter.Contains(file.MimeType)) continue;
 
+                var record = await CreateSourceRecordAsync(file, "list", _startPageToken, cancellationToken);
+                if (record != null)
+                    records.Add(record);
+            }
+
+            // Follow the pagination cursor - otherwise folders with more files than
+            // one page silently lose data.
+            pageToken = result.NextPageToken;
+        }
+        while (!string.IsNullOrEmpty(pageToken));
+
+        _initialListDone = true;
         return records;
     }
 
@@ -214,12 +245,16 @@ public sealed class GoogleDriveSourceTask : SourceTask
 
                 var result = await request.ExecuteAsync(cancellationToken);
 
+                // Stamp every record with the token to resume from after this batch,
+                // so a restart continues behind the last committed record.
+                var nextToken = result.NewStartPageToken ?? result.NextPageToken;
+
                 foreach (var change in result.Changes ?? [])
                 {
                     if (change.Removed == true)
                     {
                         // File was removed
-                        var removeRecord = CreateRemoveRecord(change.FileId);
+                        var removeRecord = CreateRemoveRecord(change.FileId, nextToken);
                         records.Add(removeRecord);
                     }
                     else if (change.File != null)
@@ -228,13 +263,13 @@ public sealed class GoogleDriveSourceTask : SourceTask
                         if (_mimeTypeFilter != null && !_mimeTypeFilter.Contains(change.File.MimeType)) continue;
                         if (!IsInFolder(change.File)) continue;
 
-                        var record = await CreateSourceRecordAsync(change.File, "change", cancellationToken);
+                        var record = await CreateSourceRecordAsync(change.File, "change", nextToken, cancellationToken);
                         if (record != null)
                             records.Add(record);
                     }
                 }
 
-                _startPageToken = result.NewStartPageToken ?? result.NextPageToken;
+                _startPageToken = nextToken;
                 break;
             }
             catch (global::Google.GoogleApiException) when (attempt < _retryMax)
@@ -255,15 +290,7 @@ public sealed class GoogleDriveSourceTask : SourceTask
 
         if (_folderId != "root")
         {
-            if (_recursive)
-            {
-                // Note: For deep recursion, would need to traverse folder structure
-                conditions.Add($"'{_folderId}' in parents");
-            }
-            else
-            {
-                conditions.Add($"'{_folderId}' in parents");
-            }
+            conditions.Add($"'{_folderId}' in parents");
         }
 
         if (_mimeTypeFilter != null && _mimeTypeFilter.Length > 0)
@@ -290,7 +317,7 @@ public sealed class GoogleDriveSourceTask : SourceTask
         return file.Parents?.Contains(_folderId) == true;
     }
 
-    private async Task<SourceRecord?> CreateSourceRecordAsync(global::Google.Apis.Drive.v3.Data.File file, string eventType, CancellationToken cancellationToken)
+    private async Task<SourceRecord?> CreateSourceRecordAsync(global::Google.Apis.Drive.v3.Data.File file, string eventType, string? resumeToken, CancellationToken cancellationToken)
     {
         if (_driveService == null) return null;
 
@@ -305,9 +332,12 @@ public sealed class GoogleDriveSourceTask : SourceTask
                 await request.DownloadAsync(stream, cancellationToken);
                 content = stream.ToArray();
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore content download errors
+                // Still emit the metadata record, but surface the download failure
+                // instead of silently dropping the content.
+                Context?.RaiseError?.Invoke(new InvalidOperationException(
+                    $"Failed to download content of file '{file.Id}' ('{file.Name}'); emitting record without content", ex));
             }
         }
 
@@ -340,6 +370,10 @@ public sealed class GoogleDriveSourceTask : SourceTask
             value = Encoding.UTF8.GetBytes(json.ToJsonString(SerializerOptions));
         }
 
+        var sourceOffset = new Dictionary<string, object> { ["fileId"] = file.Id, ["modifiedTime"] = file.ModifiedTimeRaw ?? "" };
+        if (!string.IsNullOrEmpty(resumeToken))
+            sourceOffset["startPageToken"] = resumeToken;
+
         return new SourceRecord
         {
             Topic = _topic,
@@ -347,17 +381,21 @@ public sealed class GoogleDriveSourceTask : SourceTask
             Value = value,
             Timestamp = file.ModifiedTimeDateTimeOffset ?? DateTimeOffset.UtcNow,
             SourcePartition = new Dictionary<string, object> { ["folderId"] = _folderId },
-            SourceOffset = new Dictionary<string, object> { ["fileId"] = file.Id, ["modifiedTime"] = file.ModifiedTimeRaw ?? "" }
+            SourceOffset = sourceOffset
         };
     }
 
-    private SourceRecord CreateRemoveRecord(string fileId)
+    private SourceRecord CreateRemoveRecord(string fileId, string? resumeToken)
     {
         var json = new JsonObject
         {
             ["id"] = fileId,
             ["eventType"] = "removed"
         };
+
+        var sourceOffset = new Dictionary<string, object> { ["fileId"] = fileId, ["removed"] = true };
+        if (!string.IsNullOrEmpty(resumeToken))
+            sourceOffset["startPageToken"] = resumeToken;
 
         return new SourceRecord
         {
@@ -366,7 +404,7 @@ public sealed class GoogleDriveSourceTask : SourceTask
             Value = Encoding.UTF8.GetBytes(json.ToJsonString(SerializerOptions)),
             Timestamp = DateTimeOffset.UtcNow,
             SourcePartition = new Dictionary<string, object> { ["folderId"] = _folderId },
-            SourceOffset = new Dictionary<string, object> { ["fileId"] = fileId, ["removed"] = true }
+            SourceOffset = sourceOffset
         };
     }
 

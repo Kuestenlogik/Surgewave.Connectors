@@ -59,11 +59,13 @@ public class CosmosDbSourceConnectorTests
     }
 
     [Fact]
-    public void Config_DefinesLeaseConfigs()
+    public void Config_DoesNotAdvertiseLeaseConfigs()
     {
+        // The pull-model source tracks its position via continuation tokens -
+        // lease containers are never used, so the keys must not be advertised
         var connector = new CosmosDbSourceConnector();
-        Assert.Contains(connector.Config.Keys, k => k.Name == CosmosDbConnectorConfig.LeaseContainerConfig);
-        Assert.Contains(connector.Config.Keys, k => k.Name == CosmosDbConnectorConfig.LeaseContainerPrefixConfig);
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == "azure.cosmosdb.lease.container");
+        Assert.DoesNotContain(connector.Config.Keys, k => k.Name == "azure.cosmosdb.lease.prefix");
     }
 
     [Fact]
@@ -225,14 +227,6 @@ public class CosmosDbSourceConnectorTests
         var connector = new CosmosDbSourceConnector();
         var pollIntervalKey = connector.Config.Keys.First(k => k.Name == CosmosDbConnectorConfig.ChangeFeedPollIntervalMsConfig);
         Assert.Equal((int)CosmosDbConnectorConfig.DefaultPollIntervalMs, pollIntervalKey.DefaultValue);
-    }
-
-    [Fact]
-    public void Config_HasExpectedLeaseContainerPrefixDefault()
-    {
-        var connector = new CosmosDbSourceConnector();
-        var leasePrefixKey = connector.Config.Keys.First(k => k.Name == CosmosDbConnectorConfig.LeaseContainerPrefixConfig);
-        Assert.Equal(CosmosDbConnectorConfig.DefaultLeaseContainerPrefix, leasePrefixKey.DefaultValue);
     }
 
     [Fact]

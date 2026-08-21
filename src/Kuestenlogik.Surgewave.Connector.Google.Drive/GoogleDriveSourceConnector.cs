@@ -28,10 +28,10 @@ public sealed class GoogleDriveSourceConnector : SourceConnector
         .Define(GoogleDriveConnectorConfig.ModeConfig, ConfigType.String, GoogleDriveConnectorConfig.ModeSourceWatch, Importance.High,
             "Source mode: 'source-watch' (poll for changes), 'source-list' (list files once)")
         // Folder configuration
+        // Note: 'recursive' is intentionally NOT defined - subfolder traversal is not
+        // implemented, and Start() rejects the option when it is supplied as true.
         .Define(GoogleDriveConnectorConfig.FolderIdConfig, ConfigType.String, GoogleDriveConnectorConfig.DefaultFolderId, Importance.Medium,
             "Google Drive folder ID to watch (use 'root' for root folder)")
-        .Define(GoogleDriveConnectorConfig.RecursiveConfig, ConfigType.Boolean, GoogleDriveConnectorConfig.DefaultRecursive, Importance.Low,
-            "Recursively watch subfolders")
         // File filtering
         .Define(GoogleDriveConnectorConfig.FilePatternConfig, ConfigType.String, GoogleDriveConnectorConfig.DefaultFilePattern, Importance.Low,
             "File name pattern to match (glob-style)")
@@ -87,6 +87,15 @@ public sealed class GoogleDriveSourceConnector : SourceConnector
 
         if (!validModes.Contains(mode))
             throw new ArgumentException($"Invalid mode: {mode}. Must be one of: {string.Join(", ", validModes)}");
+
+        // Honest surface: subfolder traversal is not implemented
+        if (config.TryGetValue(GoogleDriveConnectorConfig.RecursiveConfig, out var recursive)
+            && bool.TryParse(recursive, out var isRecursive) && isRecursive)
+        {
+            throw new ArgumentException(
+                $"'{GoogleDriveConnectorConfig.RecursiveConfig}' is not supported: subfolder traversal is not implemented. " +
+                $"Point '{GoogleDriveConnectorConfig.FolderIdConfig}' at the subfolder instead.");
+        }
 
         foreach (var kvp in config)
             _config[kvp.Key] = kvp.Value;

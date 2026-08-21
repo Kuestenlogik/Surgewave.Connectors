@@ -3,21 +3,24 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Kuestenlogik.Surgewave.Connect;
+using Kuestenlogik.Surgewave.Connect.Nodes;
 
 namespace Kuestenlogik.Surgewave.Connector.SpaCy;
 
 /// <summary>
-/// Task that processes text using spaCy NLP server.
+/// Task that processes text using spaCy NLP server and emits the NLP results
+/// to the configured output topic.
 /// </summary>
 [SuppressMessage("Performance", "CA1859:Use concrete types when possible for improved performance", Justification = "Interface used for extensibility")]
 [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "HttpClient disposed in Dispose()")]
 [SuppressMessage("Usage", "CA2234:Pass System.Uri objects instead of strings", Justification = "URL strings are simpler for REST API calls")]
-public sealed class SpaCySinkTask : SinkTask
+public sealed class SpaCySinkTask : ProcessorTask
 {
     private HttpClient? _httpClient;
     private string _serverUrl = null!;
     private string _model = null!;
     private string _textField = null!;
+    private string _outputTopic = null!;
     private HashSet<string> _operations = null!;
     private bool _includeText;
     private bool _includeVectors;
@@ -27,6 +30,16 @@ public sealed class SpaCySinkTask : SinkTask
 
     public override void Start(IDictionary<string, string> config)
     {
+        base.Start(config);
+
+        if (!config.TryGetValue(SpaCyConnectorConfig.OutputTopic, out var outputTopic) ||
+            string.IsNullOrWhiteSpace(outputTopic))
+        {
+            throw new ArgumentException($"'{SpaCyConnectorConfig.OutputTopic}' is required");
+        }
+
+        _outputTopic = outputTopic;
+
         _serverUrl = (config.TryGetValue(SpaCyConnectorConfig.ServerUrl, out var serverUrl)
             ? serverUrl : SpaCyConnectorConfig.DefaultServerUrl).TrimEnd('/');
         _model = config.TryGetValue(SpaCyConnectorConfig.Model, out var model)

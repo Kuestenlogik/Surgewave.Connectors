@@ -61,11 +61,29 @@ public sealed class HanaSourceTask : SourceTask
             _columns = columnsStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
 
+        // Resume incremental reads from the offset the runtime stored for this source
+        // partition — without this every restart re-emits the full table.
+        var storedOffset = Context?.OffsetStorageReader?.Offset(new Dictionary<string, object>
+        {
+            ["source"] = "hana",
+            ["table"] = _table ?? "query"
+        });
+        if (storedOffset != null && storedOffset.TryGetValue("incremental_value", out var lastValue))
+        {
+            var restored = lastValue?.ToString();
+            if (!string.IsNullOrEmpty(restored))
+            {
+                _lastIncrementalValue = restored;
+            }
+        }
+
         _connectionString = BuildConnectionString(config);
 #if SAP_HANA_AVAILABLE
         _connection = new HanaConnection(_connectionString);
 #else
-        throw new NotSupportedException("SAP HANA driver not installed. Install the SAP HANA client and add the Sap.Data.Hana.Core.v2.1 package.");
+        throw new NotSupportedException(
+            "SAP HANA driver not installed. Install the SAP HANA client, add the Sap.Data.Hana.Core.v2.1 package " +
+            "(see the comment in the connector's csproj) and define SAP_HANA_AVAILABLE, then rebuild the connector.");
 #endif
     }
 
@@ -144,9 +162,8 @@ public sealed class HanaSourceTask : SourceTask
 
             while (await reader.ReadAsync(cancellationToken))
             {
-                var record = CreateRecord(reader);
-                records.Add(record);
-
+                // Advance the incremental value first so the record's SourceOffset
+                // carries its own row's value, not the previous row's.
                 if (!string.IsNullOrEmpty(_incrementalColumn))
                 {
                     var ordinal = reader.GetOrdinal(_incrementalColumn);
@@ -156,12 +173,16 @@ public sealed class HanaSourceTask : SourceTask
                     }
                 }
 
+                var record = CreateRecord(reader);
+                records.Add(record);
+
                 if (records.Count >= _rowLimit) break;
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Log and continue
+            // Surface the failure; polling resumes on the next interval
+            Context?.RaiseError?.Invoke(ex);
         }
         finally
         {

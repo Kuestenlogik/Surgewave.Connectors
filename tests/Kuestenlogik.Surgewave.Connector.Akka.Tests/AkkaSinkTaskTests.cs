@@ -121,6 +121,40 @@ public class AkkaSinkTaskTests
     }
 
     [Fact]
+    public async Task PutAsync_TellOnly_MissingTargetActor_SurfacesDeadLetterAsError()
+    {
+        var errors = new List<Exception>();
+        using var task = new AkkaSinkTask();
+        task.Initialize(new TaskContext { RaiseError = errors.Add });
+
+        var config = new Dictionary<string, string>
+        {
+            [AkkaConnectorConfig.ActorPathConfig] = "/user/does-not-exist",
+            [AkkaConnectorConfig.TellOnlyConfig] = "true"
+        };
+
+        task.Start(config);
+
+        var record = new SinkRecord
+        {
+            Topic = "test",
+            Partition = 0,
+            Offset = 0,
+            Value = System.Text.Encoding.UTF8.GetBytes("{\"x\":1}")
+        };
+        await task.PutAsync([record], CancellationToken.None);
+
+        // Dead-letter publication is asynchronous - poll briefly for the error
+        for (var i = 0; i < 100 && errors.Count == 0; i++)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.NotEmpty(errors);
+        task.Stop();
+    }
+
+    [Fact]
     public void Stop_CanBeCalledMultipleTimes()
     {
         using var task = new AkkaSinkTask();
