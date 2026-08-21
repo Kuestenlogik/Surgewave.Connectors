@@ -156,7 +156,9 @@ public class NatsObjectStoreSourceTaskTests
     private static async Task<IReadOnlyList<SourceRecord>> DrainAsync(NatsObjectStoreSourceTask task, int expected)
     {
         var records = new List<SourceRecord>();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        // Generous: the deadline only breaks a runaway loop, it is not the assertion -
+        // a loaded CI runner can starve these polls for far longer than the happy path needs.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
 
         while (records.Count < expected && DateTime.UtcNow < deadline)
         {
@@ -173,7 +175,7 @@ public class NatsObjectStoreSourceTaskTests
 
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
 
         while (!condition() && DateTime.UtcNow < deadline)
         {

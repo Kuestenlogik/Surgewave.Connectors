@@ -22,7 +22,7 @@
     <!-- Testing -->
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
-    <PackageVersion Include="xunit.v3" Version="3.2.2" />
+    <PackageVersion Include="xunit.v3" Version="4.0.0" />
     <!-- Coverage: coverlet.msbuild ist MSBuild-driven und funktioniert
          unabhaengig vom Test-Runner (VSTest und MTP gleichermassen).
          coverlet.collector waere VSTest-only und wird im MTP-Modus

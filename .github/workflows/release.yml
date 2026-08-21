@@ -42,7 +42,7 @@ jobs:
       - name: Build & Test
         run: |
           dotnet build Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-restore -p:Version=${{ steps.version.outputs.VERSION }}
-          dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -v normal
+          dotnet test --solution Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -v normal
 
       - name: Pack NuGet
         run: dotnet pack Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -o artifacts/packages -p:Version=${{ steps.version.outputs.VERSION }}

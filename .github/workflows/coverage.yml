@@ -62,7 +62,7 @@ jobs:
       # `**/*.cobertura.xml`-Glob.
       - name: Run tests with coverage
         run: |
-          dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
+          dotnet test --solution Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
             --filter "FullyQualifiedName!~IntegrationTests" \
             --verbosity minimal \
             /p:CollectCoverage=true \
