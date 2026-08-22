@@ -20,16 +20,15 @@
     <PackageVersion Include="Kuestenlogik.Surgewave.Runtime" Version="0.5.0" />
     <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.5.0" />
     <!-- Testing -->
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.0" />
-    <!-- Coverage: coverlet.msbuild ist MSBuild-driven und funktioniert
-         unabhaengig vom Test-Runner (VSTest und MTP gleichermassen).
-         coverlet.collector waere VSTest-only und wird im MTP-Modus
-         (TestingPlatformDotnetTestSupport=true) stumm ignoriert; bleibt
-         drin fuer eventuelle VSTest-Fallbacks. -->
-    <PackageVersion Include="coverlet.msbuild" Version="10.0.1" />
-    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage. Coverlet scheidet
+         in beiden Varianten aus, seit xunit.v3 4.x auf Microsoft.Testing
+         .Platform laeuft: coverlet.collector war ein VSTest-DataCollector,
+         und coverlet.msbuild laeuft nie, weil dotnet test im MTP-Modus
+         /p:-Argumente an die Test-App reicht statt an MSBuild - der Lauf
+         erzeugt dann still gar keinen Report. -->
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.10.0" />
     <!-- Logging -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />

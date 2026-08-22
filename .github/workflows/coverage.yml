@@ -48,33 +48,32 @@ jobs:
       - name: Build
         run: dotnet build Kuestenlogik.Surgewave.Connectors.slnx --no-restore -c Release
 
-      # Coverage via coverlet.msbuild (MSBuild-driven). Funktioniert
-      # mit xUnit v3 + Microsoft.Testing.Platform genauso wie mit
-      # VSTest, weil Coverlet hier als MSBuild-Target laeuft, nicht
-      # als VSTest-Collector.
+      # Coverage via Microsoft.Testing.Extensions.CodeCoverage. Coverlet
+      # scheidet aus: der Collector war VSTest-only, und coverlet.msbuild
+      # laeuft im MTP-Modus ebenfalls nicht - dotnet test reicht /p: an die
+      # Test-App statt an MSBuild, der Lauf erzeugt dann still gar keinen
+      # Report (genau so ist dieser Job stillschweigend ausgefallen).
       #
-      # KEIN /p:MergeWith=... auf slnx-Ebene: jedes Test-Projekt
-      # versucht in dieselbe Merge-Datei zu schreiben und ueber-
-      # schreibt die anderen (letzter gewinnt, Coverage zeigt nur
-      # 1 Assembly). Stattdessen RELATIVER CoverletOutput pro
-      # Projekt — Coverlet legt seine .cobertura.xml im jeweiligen
-      # Projekt-Verzeichnis ab, ReportGenerator sammelt alle via
-      # `**/*.cobertura.xml`-Glob.
+      # KEIN fixes --coverage-output: jedes Test-Projekt schriebe sonst in
+      # dieselbe Datei und ueberschriebe die anderen. Die Extension vergibt
+      # pro Projekt einen <guid>-Namen, ReportGenerator sammelt sie per Glob.
+      #
+      # Die Engine wechselt damit - die Zahlen sind nicht 1:1 mit den frueher
+      # von Coverlet gemessenen vergleichbar, der Floor unten ist neu zu
+      # kalibrieren.
       - name: Run tests with coverage
         run: |
           dotnet test --solution Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
             --filter "FullyQualifiedName!~IntegrationTests" \
             --verbosity minimal \
-            /p:CollectCoverage=true \
-            /p:CoverletOutputFormat=cobertura \
-            /p:CoverletOutput=./coverage.cobertura.xml \
-            /p:Include="[Kuestenlogik.Surgewave.Connector.*]*" \
-            /p:Exclude="[*.Tests]*"
+            --coverage \
+            --coverage-output-format cobertura \
+            --results-directory artifacts/coverage/raw
 
       - name: Generate coverage report
         uses: danielpalme/ReportGenerator-GitHub-Action@5
         with:
-          reports: 'tests/**/coverage.cobertura.xml'
+          reports: 'artifacts/coverage/raw/**/*.cobertura.xml'
           targetdir: 'artifacts/coverage/report'
           reporttypes: 'Html;Badges;TextSummary;MarkdownSummaryGithub'
           assemblyfilters: '+Kuestenlogik.Surgewave.Connector.*;-*.Tests;-*.Benchmarks'

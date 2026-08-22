@@ -1,41 +1,50 @@
 # Testing — Surgewave.Connectors
 
 This repository ships 118 connectors. Each connector lives under
-`src/Kuestenlogik.Surgewave.Connector.<Name>/`; the matching test project
-(when present) lives under `tests/Kuestenlogik.Surgewave.Connector.<Name>.Tests/`.
+`src/Kuestenlogik.Surgewave.Connector.<Name>/` and has a matching test project
+under `tests/Kuestenlogik.Surgewave.Connector.<Name>.Tests/`.
 
 ## Coverage policy
 
-`.github/workflows/coverage.yml` runs `dotnet test` with Coverlet
-(`coverlet.runsettings`) on every PR and `main` push. It generates a
-ReportGenerator HTML/Markdown summary plus badges, posts a comment to the PR,
-and enforces a coverage **floor**.
+`.github/workflows/coverage.yml` collects coverage on every PR and `main` push
+via `Microsoft.Testing.Extensions.CodeCoverage`. Coverlet is not usable here in
+either form now that xunit.v3 4.x runs on Microsoft.Testing.Platform:
+`coverlet.collector` is a VSTest data collector, and `coverlet.msbuild` never
+runs either, because MTP-mode `dotnet test` forwards `/p:` to the test
+application instead of to MSBuild — the job passed its tests and then produced
+no report at all. The workflow generates a ReportGenerator HTML/Markdown summary
+plus badges, posts a comment to the PR, and enforces a coverage **floor**.
 
 Current floor: **40 % line / 30 % branch**.
 
-Baseline measured 2026-05-26: **41.5 % line / 31.6 % branch** across 72
-Connector-Assemblies (the 45 connectors without a test project are absent
-from the report — they contribute zero to both numerator and denominator).
-The floor sits ~1.5 pp under baseline so moderate fluctuation passes but a
-real regression fails CI. The floor is ratcheted up alongside the
+Baseline measured 2026-05-26 with Coverlet: **41.5 % line / 31.6 % branch**
+across 72 Connector-Assemblies — at the time, 45 connectors had no test project
+and were absent from the report entirely. Two things have moved since: all 118
+connectors now have a test project, and the coverage engine changed. The floor
+therefore needs recalibrating against the first run of the new setup rather than
+being read as a like-for-like comparison. It is ratcheted up alongside the
 [backlog](#open-testing-work) below.
 
 Run the same checks locally:
 
 ```bash
-dotnet test Kuestenlogik.Surgewave.Connectors.slnx -c Release \
-  --collect:"XPlat Code Coverage" \
-  --results-directory artifacts/coverage/raw \
-  --settings coverlet.runsettings \
-  --filter "FullyQualifiedName!~IntegrationTests"
+dotnet test --solution Kuestenlogik.Surgewave.Connectors.slnx -c Release \
+  --filter "FullyQualifiedName!~IntegrationTests" \
+  --coverage \
+  --coverage-output-format cobertura \
+  --results-directory artifacts/coverage/raw
 
 reportgenerator \
-  -reports:'artifacts/coverage/raw/**/coverage.cobertura.xml' \
+  -reports:'artifacts/coverage/raw/**/*.cobertura.xml' \
   -targetdir:artifacts/coverage/report \
   -reporttypes:'Html;TextSummary'
 
 cat artifacts/coverage/report/Summary.txt
 ```
+
+Do not pin `--coverage-output` to a fixed name: every test project would then
+write to the same file and overwrite the others. The extension gives each
+report a `<guid>` name, which is what the glob above matches.
 
 ## Test-style matrix
 

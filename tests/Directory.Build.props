@@ -6,14 +6,14 @@
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
-  <!-- Coverage: coverlet.msbuild (MSBuild-driven, runner-agnostisch).
-       Aktivieren via:
-         dotnet test ... /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=<dir>/
-       Funktioniert mit MTP und VSTest gleichermassen. -->
+  <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage, aktiviert ueber die
+       coverage-Optionen von dotnet test (siehe coverage.yml).
+       Coverlet ist hier keine Option: der Collector war VSTest-only, und
+       coverlet.msbuild laeuft im MTP-Modus ebenfalls nicht, weil dotnet test
+       Properties an die Test-App reicht statt an MSBuild.
+       Achtung: zwei aufeinanderfolgende Bindestriche sind in einem
+       XML-Kommentar ungueltig und lassen MSBuild die ganze Datei verwerfen. -->
   <ItemGroup>
-    <PackageReference Include="coverlet.msbuild">
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-      <PrivateAssets>all</PrivateAssets>
-    </PackageReference>
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
   </ItemGroup>
 </Project>
