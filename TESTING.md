@@ -17,12 +17,12 @@ plus badges, posts a comment to the PR, and enforces a coverage **floor**.
 
 Current floor: **40 % line / 30 % branch**.
 
-Baseline measured 2026-05-26 with Coverlet: **41.5 % line / 31.6 % branch**
-across 72 Connector-Assemblies — at the time, 45 connectors had no test project
-and were absent from the report entirely. Two things have moved since: all 118
-connectors now have a test project, and the coverage engine changed. The floor
-therefore needs recalibrating against the first run of the new setup rather than
-being read as a like-for-like comparison. It is ratcheted up alongside the
+Measured 2026-08-22: **47.9 % line / 39.3 % branch** across all 118 connectors.
+That is not a like-for-like improvement on the earlier baseline — 41.5 % line /
+31.6 % branch, taken 2026-05-26 with Coverlet across the 72 connectors that had
+a test project at the time. Two things moved at once: the remaining 45
+connectors got test projects, and the coverage engine changed. The floor still
+has ~8 pp of headroom and is ratcheted up alongside the
 [backlog](#open-testing-work) below.
 
 Run the same checks locally:
