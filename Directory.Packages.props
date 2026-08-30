@@ -135,8 +135,8 @@
     <PackageVersion Include="Sap.Data.Hana.Core.v2.1" Version="2.20.22" />
     <PackageVersion Include="Simple.OData.Client" Version="6.0.1" />
     <!-- Orleans -->
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.2.2" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.2.2" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.3.1" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.3.1" />
     <!-- Actor Framework -->
     <PackageVersion Include="Akka" Version="1.5.70" />
     <PackageVersion Include="Akka.Cluster" Version="1.5.70" />
