@@ -28,7 +28,7 @@
          und coverlet.msbuild laeuft nie, weil dotnet test im MTP-Modus
          /p:-Argumente an die Test-App reicht statt an MSBuild - der Lauf
          erzeugt dann still gar keinen Report. -->
-    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.10.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.11.0" />
     <!-- Logging -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
@@ -116,7 +116,7 @@
     <PackageVersion Include="Azure.Storage.Queues" Version="12.27.1" />
     <!-- Team Messaging -->
     <PackageVersion Include="SlackNet" Version="0.17.11" />
-    <PackageVersion Include="Microsoft.Graph" Version="6.5.0" />
+    <PackageVersion Include="Microsoft.Graph" Version="6.6.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Discord.Net" Version="3.20.1" />
     <PackageVersion Include="Telegram.Bot" Version="22.10.2.1" />
