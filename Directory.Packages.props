@@ -54,7 +54,7 @@
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
     <PackageVersion Include="MySqlCdc" Version="4.0.1" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
-    <PackageVersion Include="Parquet.Net" Version="5.5.0" />
+    <PackageVersion Include="Parquet.Net" Version="6.1.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.1" />
     <PackageVersion Include="MQTTnet" Version="5.2.0.1603" />
     <PackageVersion Include="StackExchange.Redis" Version="3.1.31" />
