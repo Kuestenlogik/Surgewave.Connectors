@@ -1,4 +1,4 @@
-Full-repo functional audit (2026-08-21, 15 parallel review agents over all 118 connectors).
+Full-repo functional audit (2026-08-21, covering all 118 connectors).
 
 > **Status: worked off.** This document records the audit as it was taken; it is not a
 > current defect list. Every bug-severity finding below has since been repaired
