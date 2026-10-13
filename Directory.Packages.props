@@ -2,14 +2,14 @@
   <!-- Central Package Version Management -->
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <!-- Transitive Pinning damit Security-Overrides aus diesem File auch dann greifen,
-         wenn das verwundbare Paket nur indirekt (durch NetMQ / Microsoft.Graph / Azure.Identity)
-         reingezogen wird. -->
+    <!-- Transitive pinning so that security overrides from this file also apply
+         when the vulnerable package is only pulled in indirectly (through NetMQ /
+         Microsoft.Graph / Azure.Identity). -->
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Transitive Pins: Microsoft.OpenApi 2.0.0 (aus Surgewave 0.3.0) hat GHSA-v5pm-xwqc-g5wc;
-         2.9.0 ist die gepatchte 2.x-Linie. -->
+    <!-- Transitive pins: Microsoft.OpenApi 2.0.0 (from Surgewave 0.3.0) has GHSA-v5pm-xwqc-g5wc;
+         2.9.0 is the patched 2.x line. -->
     <PackageVersion Include="Microsoft.OpenApi" Version="3.10.2" />
 
     <!-- Surgewave Core (from local or CI NuGet feed) -->
@@ -22,12 +22,12 @@
     <!-- Testing -->
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.0" />
-    <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage. Coverlet scheidet
-         in beiden Varianten aus, seit xunit.v3 4.x auf Microsoft.Testing
-         .Platform laeuft: coverlet.collector war ein VSTest-DataCollector,
-         und coverlet.msbuild laeuft nie, weil dotnet test im MTP-Modus
-         /p:-Argumente an die Test-App reicht statt an MSBuild - der Lauf
-         erzeugt dann still gar keinen Report. -->
+    <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage. Coverlet is out
+         in both variants since xunit.v3 4.x runs on Microsoft.Testing
+         .Platform: coverlet.collector was a VSTest data collector, and
+         coverlet.msbuild never runs, because dotnet test in MTP mode
+         passes /p: arguments to the test app instead of MSBuild - the run
+         then silently produces no report at all. -->
     <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
     <!-- Logging -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
@@ -39,16 +39,16 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
     <!-- Transitive security overrides:
-         - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf; 10.0.8 → GHSA-8q5v-6pqq-x66h u. a. (ZeroMQ-Connector).
-         - SSH.NET 2025.1.0 → advisory 2026-08 (Sftp-Connector) — direkter Bump auf 2026.0.0.
-         - Microsoft.Kiota.Abstractions 1.21.1 → GHSA-7j59-v9qr-6fq9 (OneDrive/Teams-Connector). -->
+         - System.Security.Cryptography.Xml 8.0.2 → GHSA-37gx-xxp4-5rgx / GHSA-w3x6-4m5h-cxqf; 10.0.8 → GHSA-8q5v-6pqq-x66h among others (ZeroMQ connector).
+         - SSH.NET 2025.1.0 → advisory 2026-08 (Sftp connector) — direct bump to 2026.0.0.
+         - Microsoft.Kiota.Abstractions 1.21.1 → GHSA-7j59-v9qr-6fq9 (OneDrive/Teams connector). -->
     <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.11" />
     <PackageVersion Include="Microsoft.Kiota.Abstractions" Version="2.0.0" />
     <!-- JSON -->
     <PackageVersion Include="System.Text.Json" Version="10.0.11" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
     <!-- Kafka Bridge -->
-    <!-- 2.14.0 align mit Kuestenlogik.Surgewave.Testing (Hauptrepo) — vermeidet NU1109 downgrade. -->
+    <!-- 2.14.0 aligned with Kuestenlogik.Surgewave.Testing (main repo) — avoids the NU1109 downgrade. -->
     <PackageVersion Include="Confluent.Kafka" Version="2.15.0" />
     <!-- Connectors: Databases -->
     <PackageVersion Include="MySqlConnector" Version="2.6.2" />
@@ -72,9 +72,9 @@
     <PackageVersion Include="Neo4j.Driver" Version="6.3.0" />
     <PackageVersion Include="GraphQL.Client" Version="6.1.0" />
     <PackageVersion Include="GraphQL.Client.Serializer.SystemTextJson" Version="6.1.0" />
-    <!-- HOLDBACK: 5.2.2 markiert RecurringComponent.RecurrenceRules
-         als deprecated (= build-error). Migration auf RecurrenceRule
-         (Singular) in eigenem PR. -->
+    <!-- HOLDBACK: 5.2.2 marks RecurringComponent.RecurrenceRules
+         as deprecated (= build error). Migration to RecurrenceRule
+         (singular) in a separate PR. -->
     <PackageVersion Include="Ical.Net" Version="5.2.3" />
     <PackageVersion Include="LibGit2Sharp" Version="0.32.0" />
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
@@ -85,9 +85,9 @@
     <PackageVersion Include="Google.Cloud.Storage.V1" Version="4.15.0" />
     <PackageVersion Include="Google.Apis.Drive.v3" Version="1.75.0.4218" />
     <PackageVersion Include="Google.Apis.PhotosLibrary.v1" Version="1.34.0.1223" />
-    <!-- HOLDBACK: 1.74.x deprecated GoogleCredential.FromJson/FromFile
-         als build-error. Migration auf CredentialFactory + ToGoogleCredential
-         in eigenem PR. -->
+    <!-- HOLDBACK: 1.74.x deprecates GoogleCredential.FromJson/FromFile
+         as a build error. Migration to CredentialFactory + ToGoogleCredential
+         in a separate PR. -->
     <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.75.0.4229" />
     <PackageVersion Include="Google.Cloud.Firestore" Version="4.4.0" />
     <PackageVersion Include="Google.Cloud.BigQuery.V2" Version="3.12.0" />
@@ -151,11 +151,11 @@
     <PackageVersion Include="Azure.AI.TextAnalytics" Version="5.3.0" />
     <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
     <PackageVersion Include="OpenAI" Version="2.13.0" />
-    <!-- HOLDBACK auf 12.1.0: 12.23.0 entfernt AnthropicClient.APIKey
-         und markiert MessageCreateParams.Temperature/TopP/TopK als
-         obsolete (= CS0618 = build-error wegen TreatWarningsAsErrors).
-         Migration nach AnthropicClient(ClientOptions) + neuere
-         Param-API in eigenem PR. -->
+    <!-- HOLDBACK at 12.1.0: 12.23.0 removes AnthropicClient.APIKey
+         and marks MessageCreateParams.Temperature/TopP/TopK as
+         obsolete (= CS0618 = build error because of TreatWarningsAsErrors).
+         Migration to AnthropicClient(ClientOptions) + the newer
+         param API in a separate PR. -->
     <PackageVersion Include="Anthropic" Version="12.42.0" />
     <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.76.0" />
     <PackageVersion Include="Google.Cloud.Language.V1" Version="3.8.0" />
@@ -169,8 +169,8 @@
     <PackageVersion Include="Cronos" Version="0.13.0" />
   </ItemGroup>
   <ItemGroup>
-    <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11: Advisory ohne gepatchte Version (2.1.11 ist latest 2.x;
-         3.x ist eine andere Major-Linie). Unterdrueckt bis Upstream-Fix — Tracking siehe Surgewave#54. -->
+    <!-- SQLitePCLRaw.lib.e_sqlite3 2.1.11: advisory without a patched version (2.1.11 is the latest 2.x;
+         3.x is a different major line). Suppressed until an upstream fix — tracked in Surgewave#54. -->
     <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
   </ItemGroup>
 </Project>

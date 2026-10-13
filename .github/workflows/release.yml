@@ -17,9 +17,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
 
-    # Job-level env damit das Secret in step-level `if:`-Ausdruecken sichtbar
-    # ist (der `secrets`-Context ist dort nicht direkt verfuegbar). Empty
-    # string wenn nicht gesetzt → `env.X != ''`-Gates skippen sauber.
+    # Job-level env so that the secret is visible in step-level `if:`
+    # expressions (the `secrets` context is not directly available there).
+    # Empty string when not set → `env.X != ''` gates skip cleanly.
     env:
       NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 
@@ -47,10 +47,10 @@ jobs:
       - name: Pack NuGet
         run: dotnet pack Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build -o artifacts/packages -p:Version=${{ steps.version.outputs.VERSION }}
 
-      # .swpkg pro Connector (118 Stueck) via Kuestenlogik.Surgewave.Build
-      # MSBuild-Tasks. Jedes Connector-csproj inherits PackageReference +
-      # Content-Include aus Directory.Build.props; nur Aufruf mit
-      # `-p:SurgewavePackPlugin=true` triggert den Packager.
+      # One .swpkg per connector (118 of them) via the Kuestenlogik.Surgewave.Build
+      # MSBuild tasks. Every connector csproj inherits PackageReference +
+      # Content include from Directory.Build.props; only a call with
+      # `-p:SurgewavePackPlugin=true` triggers the packager.
       - name: Pack .swpkg plugins
         run: |
           set -e
@@ -67,9 +67,9 @@ jobs:
         if: ${{ !contains(github.ref, '-rc') }}
         run: dotnet nuget push "artifacts/packages/*.nupkg" --source "https://nuget.pkg.github.com/Kuestenlogik/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
 
-      # nuget.org: nur GA-Tags (kein `-rc`), nur wenn Secret konfiguriert.
-      # Connectors sind alle Apache 2.0 → public-pushbar. NUGET_API_KEY
-      # braucht den 'Push new packages and package versions'-Scope mit Glob
+      # nuget.org: only GA tags (no `-rc`), only when the secret is configured.
+      # Connectors are all Apache 2.0 → publicly pushable. NUGET_API_KEY
+      # needs the 'Push new packages and package versions' scope with glob
       # `Kuestenlogik.Surgewave.Connector.*`.
       - name: Publish NuGet to nuget.org
         if: ${{ !contains(github.ref, '-rc') && env.NUGET_API_KEY != '' }}
@@ -84,9 +84,9 @@ jobs:
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref, '-rc') }}
-          # 118 Connectors × (.nupkg + .swpkg) sind als Release-Assets viel,
-          # aber genau das macht Side-Load ohne Marketplace moeglich. Wer das
-          # nicht braucht, holt die Pakete von nuget.org / GHP.
+          # 118 connectors × (.nupkg + .swpkg) are a lot of release assets,
+          # but exactly that makes side-loading without a marketplace possible.
+          # Whoever doesn't need that gets the packages from nuget.org / GHP.
           files: |
             artifacts/packages/*.nupkg
             artifacts/pluginPackage/*.swpkg

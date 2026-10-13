@@ -49,18 +49,18 @@ jobs:
         run: dotnet build Kuestenlogik.Surgewave.Connectors.slnx --no-restore -c Release
 
       # Coverage via Microsoft.Testing.Extensions.CodeCoverage. Coverlet
-      # scheidet aus: der Collector war VSTest-only, und coverlet.msbuild
-      # laeuft im MTP-Modus ebenfalls nicht - dotnet test reicht /p: an die
-      # Test-App statt an MSBuild, der Lauf erzeugt dann still gar keinen
-      # Report (genau so ist dieser Job stillschweigend ausgefallen).
+      # is out: the collector was VSTest-only, and coverlet.msbuild does not
+      # run in MTP mode either - dotnet test passes /p: to the test app
+      # instead of MSBuild, and the run then silently produces no report at
+      # all (which is exactly how this job failed without anyone noticing).
       #
-      # KEIN fixes --coverage-output: jedes Test-Projekt schriebe sonst in
-      # dieselbe Datei und ueberschriebe die anderen. Die Extension vergibt
-      # pro Projekt einen <guid>-Namen, ReportGenerator sammelt sie per Glob.
+      # NO fixed --coverage-output: every test project would otherwise write
+      # to the same file and overwrite the others. The extension gives each
+      # project a <guid> name, ReportGenerator collects them by glob.
       #
-      # Die Engine wechselt damit - die Zahlen sind nicht 1:1 mit den frueher
-      # von Coverlet gemessenen vergleichbar, der Floor unten ist neu zu
-      # kalibrieren.
+      # This changes the engine - the numbers are not 1:1 comparable with
+      # the ones Coverlet measured before, the floor below has to be
+      # recalibrated.
       - name: Run tests with coverage
         run: |
           dotnet test --solution Kuestenlogik.Surgewave.Connectors.slnx -c Release --no-build \
@@ -87,12 +87,12 @@ jobs:
             cat artifacts/coverage/report/Summary.txt
           fi
 
-      # Coverage-Floor — verhindert Regressionen ueber die aktuell
-      # gemessene Baseline hinaus. Erst-Messung 2026-05-26:
-      # Line 41.5 % / Branch 31.6 % auf 72 Connector-Assemblies
-      # (von 118 — 45 haben heute kein Test-Projekt). Threshold ist
-      # ~1.5pp unter Baseline gesetzt, sodass eine echte Regression
-      # CI failt aber moderate Schwankungen toleriert werden.
+      # Coverage floor — prevents regressions below the currently
+      # measured baseline. First measurement 2026-05-26:
+      # line 41.5 % / branch 31.6 % across 72 connector assemblies
+      # (of 118 — 45 have no test project today). The threshold is set
+      # ~1.5pp below the baseline, so that a real regression fails CI
+      # while moderate fluctuations are tolerated.
       - name: Enforce coverage thresholds
         if: always()
         run: |

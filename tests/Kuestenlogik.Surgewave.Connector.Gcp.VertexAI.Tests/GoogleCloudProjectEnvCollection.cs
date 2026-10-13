@@ -3,12 +3,12 @@ namespace Kuestenlogik.Surgewave.Connector.Gcp.VertexAI.Tests;
 using Xunit;
 
 /// <summary>
-/// xunit-Collection fuer Tests, die die <c>GOOGLE_CLOUD_PROJECT</c> Umgebungs-
-/// variable lesen und schreiben. Process-global, deshalb braucht es eine
-/// serialisierte Ausfuehrung — sonst sehen sich die Tests gegenseitig die
-/// Werte. Race mit Symptom "Failed: 1, Passed: 35" hat im Release-Workflow
-/// flakily gefeuert, im CI-Workflow nicht (anders gescheduletes Thread-Pool-
-/// Layout). Klassen mit [Collection(Name)] gehen darauf hin sequentiell.
+/// xunit collection for tests that read and write the <c>GOOGLE_CLOUD_PROJECT</c>
+/// environment variable. It is process-global, so these tests need serialised
+/// execution — otherwise the tests see each other's values. A race with the
+/// symptom "Failed: 1, Passed: 35" fired flakily in the release workflow,
+/// not in the CI workflow (differently scheduled thread-pool layout).
+/// Classes with [Collection(Name)] therefore run sequentially.
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class GoogleCloudProjectEnvCollection

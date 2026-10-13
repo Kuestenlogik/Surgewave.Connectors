@@ -24,9 +24,9 @@
   </PropertyGroup>
 
   <!-- Common metadata for NuGet packages.
-       Authors/Company als ASCII-Spelling (NuGet-Metadaten-Kompatibilitaet, weil
-       das Surgewave-Core dieselbe Konvention nutzt); human-facing Copyright behaelt
-       den Umlaut. -->
+       Authors/Company in ASCII spelling (NuGet metadata compatibility, because
+       Surgewave core uses the same convention); the human-facing copyright keeps
+       the umlaut. -->
   <PropertyGroup Condition="'$(IsPackable)' != 'false'">
     <Authors>Kuestenlogik</Authors>
     <Company>Kuestenlogik</Company>
@@ -39,7 +39,7 @@
     <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 
-  <!-- icon.png aus dem Repo-Root in jedes NuGet einbetten. Quelle ist
+  <!-- Embed icon.png from the repo root into every NuGet package. The source is
        scripts/icon.svg + scripts/generate-icon.js (sharp-based render). -->
   <ItemGroup Condition="'$(IsPackable)' != 'false'">
     <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Link="icon.png" Visible="false" Condition="Exists('$(MSBuildThisFileDirectory)icon.png')" />

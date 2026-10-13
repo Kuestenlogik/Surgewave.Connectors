@@ -6,13 +6,13 @@
     <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
-  <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage, aktiviert ueber die
-       coverage-Optionen von dotnet test (siehe coverage.yml).
-       Coverlet ist hier keine Option: der Collector war VSTest-only, und
-       coverlet.msbuild laeuft im MTP-Modus ebenfalls nicht, weil dotnet test
-       Properties an die Test-App reicht statt an MSBuild.
-       Achtung: zwei aufeinanderfolgende Bindestriche sind in einem
-       XML-Kommentar ungueltig und lassen MSBuild die ganze Datei verwerfen. -->
+  <!-- Coverage: Microsoft.Testing.Extensions.CodeCoverage, enabled through the
+       coverage options of dotnet test (see coverage.yml).
+       Coverlet is not an option here: the collector was VSTest-only, and
+       coverlet.msbuild does not run in MTP mode either, because dotnet test
+       passes properties to the test app instead of MSBuild.
+       Caution: two consecutive hyphens are invalid in an XML comment
+       and make MSBuild discard the whole file. -->
   <ItemGroup>
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
   </ItemGroup>
