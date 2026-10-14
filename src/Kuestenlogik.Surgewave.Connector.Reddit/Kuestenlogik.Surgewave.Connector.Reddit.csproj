@@ -4,8 +4,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- Suppress known vulnerabilities in Reddit package dependencies -->
-    <NoWarn>$(NoWarn);NU1903</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -18,6 +16,10 @@
 
   <ItemGroup>
     <PackageReference Include="Reddit" />
+    <!-- Reddit 1.5.2 pulls RestSharp 106.6.9 (GHSA-9pq7-rcxv-47vq). 106.15.0 is the last 106.x
+         release; RestSharp 107+ changed the API the Reddit package calls. Only this
+         connector is lifted, the InfluxDB connector keeps its own RestSharp 113. -->
+    <PackageReference Include="RestSharp" VersionOverride="106.15.0" />
   </ItemGroup>
 
 </Project>

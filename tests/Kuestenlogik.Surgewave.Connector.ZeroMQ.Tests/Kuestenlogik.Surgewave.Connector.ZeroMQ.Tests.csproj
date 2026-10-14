@@ -4,8 +4,6 @@
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <IsTestProject>true</IsTestProject>
-    <!-- NU1904: inherited from the connector - NetMQ pulls a package with a security advisory -->
-    <NoWarn>$(NoWarn);NU1904</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

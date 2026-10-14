@@ -6,8 +6,6 @@
     <IsPackable>false</IsPackable>
     <OutputType>Exe</OutputType>
     <IsTestProject>true</IsTestProject>
-    <!-- Suppress low-severity AWSSDK.Core vulnerability warning -->
-    <NoWarn>$(NoWarn);NU1901</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3" />
