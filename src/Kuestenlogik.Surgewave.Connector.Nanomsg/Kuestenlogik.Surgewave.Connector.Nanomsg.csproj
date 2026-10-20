@@ -4,8 +4,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <!-- NNanomsg targets .NET Framework only, but may work via compatibility shim -->
-    <NoWarn>$(NoWarn);NU1701</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,7 +11,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="NNanomsg" />
+    <!-- NU1701 for this package only: NNanomsg ships .NET Framework builds only (no netstandard/net build exists);
+         it is a thin P/Invoke wrapper over the native nanomsg library and loads through the compatibility shim. -->
+    <PackageReference Include="NNanomsg" NoWarn="NU1701" />
   </ItemGroup>
 
   <ItemGroup>

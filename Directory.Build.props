@@ -8,7 +8,12 @@
     <AnalysisLevel>latest-all</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <NoWarn>$(NoWarn);CA1027;CA1720;CA1716;CA1815;CA1873;CA2024;CA2025;CA2227;NU1510;NU1902</NoWarn>
+    <!-- NuGet audit: every package in the graph, direct and transitive, with an advisory of any severity
+         (NU1901-NU1904) fails the restore through TreatWarningsAsErrors. No NuGet warning is suppressed;
+         an advisory without a patched version would get one NuGetAuditSuppress item with its link and reason. -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
   </PropertyGroup>
 
   <!-- Centralized build output paths -->

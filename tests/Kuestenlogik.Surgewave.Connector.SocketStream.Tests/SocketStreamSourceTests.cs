@@ -24,7 +24,7 @@ public class SocketStreamSourceTests : IDisposable
             try { client.Dispose(); } catch { }
         }
         _clients.Clear();
-        try { _server?.Stop(); } catch { }
+        try { _server?.Dispose(); } catch { }
     }
 
     [Fact]

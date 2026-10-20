@@ -261,7 +261,7 @@ public sealed class MirrorSourceConnector : SourceConnector
         }
         catch (Exception ex)
         {
-            Context.RaiseError(new Exception($"Failed to refresh topics: {ex.Message}", ex));
+            Context.RaiseError?.Invoke(new Exception($"Failed to refresh topics: {ex.Message}", ex));
         }
         finally
         {
@@ -320,7 +320,7 @@ public sealed class MirrorSourceConnector : SourceConnector
             if (removed.Count > 0)
                 _logger?.LogInformation("Topics removed: {Topics}", string.Join(", ", removed));
 
-            Context.RequestTaskReconfiguration();
+            Context.RequestTaskReconfiguration?.Invoke();
         }
     }
 

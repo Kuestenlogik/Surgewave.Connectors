@@ -89,7 +89,9 @@ public sealed class LanguageSinkTask : SinkTask
             builder.QuotaProject = projectId;
         }
 
-        // Handle credentials
+        // Handle credentials. The connector accepts whatever credential JSON the operator configures (service account,
+        // external account, authorized user); the typed CredentialFactory replacement needs the credential type up front.
+#pragma warning disable CS0618 // JsonCredentials / CredentialsPath: see above
         if (config.TryGetValue(LanguageConnectorConfig.CredentialsJsonConfig, out var credJson) && !string.IsNullOrEmpty(credJson))
         {
             builder.JsonCredentials = credJson;
@@ -98,6 +100,7 @@ public sealed class LanguageSinkTask : SinkTask
         {
             builder.CredentialsPath = credPath;
         }
+#pragma warning restore CS0618
         // Otherwise uses Application Default Credentials (ADC)
 
         _client = builder.Build();

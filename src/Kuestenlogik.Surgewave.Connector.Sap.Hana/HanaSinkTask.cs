@@ -24,7 +24,9 @@ public sealed class HanaSinkTask : SinkTask
 #if SAP_HANA_AVAILABLE
     private HanaConnection? _connection;
 #else
+#pragma warning disable CS0649 // without the SAP HANA driver Start throws before a connection exists; the field only keeps the shared code compiling
     private DbConnection? _connection;
+#pragma warning restore CS0649
 #endif
     private string _connectionString = null!;
     private string _targetTable = null!;

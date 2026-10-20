@@ -204,7 +204,7 @@ public sealed class ODataSinkTask : SinkTask
             switch (_writeMode)
             {
                 case "create":
-                    oDataBatch += c => c.For(_entitySet).Set(entity).InsertEntryAsync(ct);
+                    oDataBatch += c => c.For(_entitySet).Set(AsODataValues(entity)).InsertEntryAsync(ct);
                     break;
 
                 case "update":
@@ -212,7 +212,7 @@ public sealed class ODataSinkTask : SinkTask
                     if (_keyFields != null && HasAllKeys(entity))
                     {
                         var keys = GetKeyValues(entity);
-                        oDataBatch += c => c.For(_entitySet).Key(keys).Set(entity).UpdateEntryAsync(ct);
+                        oDataBatch += c => c.For(_entitySet).Key(keys).Set(AsODataValues(entity)).UpdateEntryAsync(ct);
                     }
                     break;
 
@@ -234,7 +234,7 @@ public sealed class ODataSinkTask : SinkTask
         switch (_writeMode)
         {
             case "create":
-                await _client!.For(_entitySet).Set(entity).InsertEntryAsync(ct);
+                await _client!.For(_entitySet).Set(AsODataValues(entity)).InsertEntryAsync(ct);
                 break;
 
             case "update":
@@ -242,7 +242,7 @@ public sealed class ODataSinkTask : SinkTask
                 if (_keyFields != null && HasAllKeys(entity))
                 {
                     var keys = GetKeyValues(entity);
-                    await _client!.For(_entitySet).Key(keys).Set(entity).UpdateEntryAsync(ct);
+                    await _client!.For(_entitySet).Key(keys).Set(AsODataValues(entity)).UpdateEntryAsync(ct);
                 }
                 break;
 
@@ -255,6 +255,12 @@ public sealed class ODataSinkTask : SinkTask
                 break;
         }
     }
+
+    /// <summary>
+    /// The record as Simple.OData.Client takes it. Its API annotates the values as non-null, but a null value is
+    /// sent as an OData null, which is what a null field in the record means; only the annotation differs.
+    /// </summary>
+    private static IDictionary<string, object> AsODataValues(Dictionary<string, object?> entity) => entity!;
 
     private bool HasAllKeys(Dictionary<string, object?> entity)
     {
