@@ -115,7 +115,7 @@
     <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.0.101.3" />
     <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.0.100.10" />
     <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
-    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.63.2" />
+    <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.63.3" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.12.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.27.1" />
     <!-- Team Messaging -->
@@ -139,8 +139,8 @@
     <PackageVersion Include="Sap.Data.Hana.Core.v2.1" Version="2.20.22" />
     <PackageVersion Include="Simple.OData.Client" Version="6.0.1" />
     <!-- Orleans -->
-    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.4.0" />
-    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Orleans.Client" Version="10.4.2" />
+    <PackageVersion Include="Microsoft.Orleans.Streaming" Version="10.4.2" />
     <!-- Actor Framework -->
     <PackageVersion Include="Akka" Version="1.5.70" />
     <PackageVersion Include="Akka.Cluster" Version="1.5.70" />
