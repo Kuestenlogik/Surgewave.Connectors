@@ -12,6 +12,7 @@ env:
 permissions:
   contents: write
   packages: write
+  id-token: write  # Trusted Publishing: OIDC token exchanged for a one-hour nuget.org key
 
 jobs:
   release:
@@ -20,8 +21,6 @@ jobs:
     # Job-level env so that the secret is visible in step-level `if:`
     # expressions (the `secrets` context is not directly available there).
     # Empty string when not set → `env.X != ''` gates skip cleanly.
-    env:
-      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
 
     steps:
       - uses: actions/checkout@v6
@@ -67,16 +66,22 @@ jobs:
         if: ${{ !contains(github.ref, '-rc') }}
         run: dotnet nuget push "artifacts/packages/*.nupkg" --source "https://nuget.pkg.github.com/Kuestenlogik/index.json" --api-key ${{ secrets.GITHUB_TOKEN }} --skip-duplicate
 
-      # nuget.org: only GA tags (no `-rc`), only when the secret is configured.
-      # Connectors are all Apache 2.0 → publicly pushable. NUGET_API_KEY
-      # needs the 'Push new packages and package versions' scope with glob
-      # `Kuestenlogik.Surgewave.Connector.*`.
+      # nuget.org, through Trusted Publishing (no stored key): the policy on
+      # nuget.org trusts this repository's release.yml. Only GA tags, no `-rc`.
+      # The temporary key lives one hour, so it is fetched right before the push.
+      - name: nuget.org login (OIDC → temporary API key)
+        if: ${{ !contains(github.ref, '-rc') && vars.NUGET_USER != '' }}
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
       - name: Publish NuGet to nuget.org
-        if: ${{ !contains(github.ref, '-rc') && env.NUGET_API_KEY != '' }}
+        if: ${{ !contains(github.ref, '-rc') && vars.NUGET_USER != '' }}
         run: |
           dotnet nuget push "artifacts/packages/*.nupkg" \
             --source https://api.nuget.org/v3/index.json \
-            --api-key "$NUGET_API_KEY" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --skip-duplicate
 
       - name: Create GitHub Release
