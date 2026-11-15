@@ -14,11 +14,11 @@
 
     <!-- Surgewave Core (from local or CI NuGet feed) -->
     <PackageVersion Include="Kuestenlogik.Surgewave.Plugins" Version="0.5.0" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Connect" Version="0.5.0" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Client" Version="0.5.0" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Testing" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Connect" Version="0.6.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Client" Version="0.6.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Testing" Version="0.6.0" />
     <PackageVersion Include="Kuestenlogik.Surgewave.Runtime" Version="0.5.0" />
-    <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.5.0" />
+    <PackageVersion Include="Kuestenlogik.Surgewave.Build" Version="0.6.0" />
     <!-- Testing -->
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.0" />
