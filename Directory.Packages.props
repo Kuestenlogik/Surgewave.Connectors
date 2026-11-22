@@ -107,7 +107,7 @@
     <PackageVersion Include="CloudNative.CloudEvents.SystemTextJson" Version="2.9.0" />
     <PackageVersion Include="Google.Cloud.PubSub.V1" Version="3.36.0" />
     <PackageVersion Include="AWSSDK.SQS" Version="4.0.100.10" />
-    <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.0.100.10" />
+    <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.1.0.2" />
     <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.103.4" />
     <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.0.100.10" />
     <PackageVersion Include="AWSSDK.Kinesis" Version="4.0.101" />
