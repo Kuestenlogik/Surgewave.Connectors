@@ -109,7 +109,7 @@
     <PackageVersion Include="AWSSDK.SQS" Version="4.0.100.10" />
     <PackageVersion Include="AWSSDK.SimpleNotificationService" Version="4.0.100.10" />
     <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.0.103.4" />
-    <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.0.100.10" />
+    <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.1.1.1" />
     <PackageVersion Include="AWSSDK.Kinesis" Version="4.0.101" />
     <PackageVersion Include="AWSSDK.Comprehend" Version="4.0.100.10" />
     <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.0.101.3" />
