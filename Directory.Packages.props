@@ -81,7 +81,7 @@
          (singular) in a separate PR. -->
     <PackageVersion Include="Ical.Net" Version="5.2.3" />
     <PackageVersion Include="LibGit2Sharp" Version="0.32.0" />
-    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
+    <PackageVersion Include="SSH.NET" Version="2026.0.1" />
     <PackageVersion Include="MailKit" Version="4.17.0" />
     <!-- Cloud Storage -->
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
