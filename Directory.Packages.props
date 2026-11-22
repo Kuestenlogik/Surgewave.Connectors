@@ -161,7 +161,7 @@
          Migration to AnthropicClient(ClientOptions) + the newer
          param API in a separate PR. -->
     <PackageVersion Include="Anthropic" Version="12.42.0" />
-    <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.76.0" />
+    <PackageVersion Include="Google.Cloud.AIPlatform.V1" Version="3.78.0" />
     <PackageVersion Include="Google.Cloud.Language.V1" Version="3.8.0" />
     <PackageVersion Include="OllamaSharp" Version="5.4.30" />
     <PackageVersion Include="Qdrant.Client" Version="1.19.0" />
