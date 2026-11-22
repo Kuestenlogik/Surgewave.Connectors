@@ -93,7 +93,7 @@
          as a build error. Migration to CredentialFactory + ToGoogleCredential
          in a separate PR. -->
     <PackageVersion Include="Google.Apis.HomeGraphService.v1" Version="1.75.0.4229" />
-    <PackageVersion Include="Google.Cloud.Firestore" Version="4.4.0" />
+    <PackageVersion Include="Google.Cloud.Firestore" Version="4.7.0" />
     <PackageVersion Include="Google.Cloud.BigQuery.V2" Version="3.12.0" />
     <PackageVersion Include="Google.Cloud.Bigtable.V2" Version="3.31.0" />
     <PackageVersion Include="Google.Cloud.Spanner.Data" Version="5.12.0" />
