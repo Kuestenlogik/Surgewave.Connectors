@@ -114,7 +114,7 @@
     <PackageVersion Include="AWSSDK.Comprehend" Version="4.0.100.10" />
     <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.1.1" />
     <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.0.100.10" />
-    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.20.2" />
+    <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
     <PackageVersion Include="Microsoft.Azure.Cosmos" Version="3.64.0" />
     <PackageVersion Include="Azure.Data.Tables" Version="12.13.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.27.1" />
