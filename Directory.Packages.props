@@ -146,7 +146,7 @@
     <PackageVersion Include="Akka.Cluster" Version="1.5.70" />
     <PackageVersion Include="Akka.Cluster.Sharding" Version="1.5.70" />
     <PackageVersion Include="Akka.Cluster.Tools" Version="1.5.70" />
-    <PackageVersion Include="Akka.Remote" Version="1.5.70" />
+    <PackageVersion Include="Akka.Remote" Version="1.5.75" />
     <PackageVersion Include="Akka.Streams" Version="1.5.70" />
     <!-- Smart Home -->
     <PackageVersion Include="Q42.HueApi" Version="3.24.0" />
