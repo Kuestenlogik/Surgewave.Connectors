@@ -84,7 +84,7 @@
     <PackageVersion Include="SSH.NET" Version="2026.0.0" />
     <PackageVersion Include="MailKit" Version="4.17.0" />
     <!-- Cloud Storage -->
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.30.2" />
     <PackageVersion Include="AWSSDK.S3" Version="4.1.2" />
     <PackageVersion Include="Google.Cloud.Storage.V1" Version="4.15.0" />
     <PackageVersion Include="Google.Apis.Drive.v3" Version="1.78.0.4327" />
