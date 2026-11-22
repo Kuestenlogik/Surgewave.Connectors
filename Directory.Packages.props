@@ -111,7 +111,7 @@
     <PackageVersion Include="AWSSDK.DynamoDBv2" Version="4.1.0.3" />
     <PackageVersion Include="AWSSDK.DynamoDBStreams" Version="4.1.1.1" />
     <PackageVersion Include="AWSSDK.Kinesis" Version="4.1.1" />
-    <PackageVersion Include="AWSSDK.Comprehend" Version="4.0.100.10" />
+    <PackageVersion Include="AWSSDK.Comprehend" Version="4.1.0.2" />
     <PackageVersion Include="AWSSDK.BedrockRuntime" Version="4.1.1" />
     <PackageVersion Include="AWSSDK.ElasticFileSystem" Version="4.1.0.2" />
     <PackageVersion Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
